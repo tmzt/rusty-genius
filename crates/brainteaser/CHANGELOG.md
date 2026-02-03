@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/tmzt/rusty-genius/compare/rusty-genius-teaser-v0.1.1...rusty-genius-teaser-v0.1.2) - 2026-02-03
+
+### Other
+
+- (chore) update examples
+- (chore) site: update badges
+
 ## [0.1.1](https://github.com/tmzt/rusty-genius/compare/rusty-genius-teaser-v0.1.0...rusty-genius-teaser-v0.1.1) - 2026-02-03
 
 ### Fixed

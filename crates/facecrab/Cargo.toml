@@ -12,7 +12,7 @@ categories.workspace = true
 publish.workspace = true
 
 [dependencies]
-rusty-genius-core = { path = "../core", version = "0.1.1" }
+rusty-genius-core = { path = "../core", version = "0.1.2" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
