@@ -44,6 +44,22 @@ jobs:
       - name: Create reviews directory
         run: mkdir -p docs/reviews
 
+      - name: Setup temp directory
+        run: |
+          mkdir -p target/tmp
+          export TMPDIR="$(pwd)/target/tmp"
+          export TEMP="$(pwd)/target/tmp"
+          export TMP="$(pwd)/target/tmp"
+
+      - name: Run Pinky (Stub) Tests
+        run: |
+          echo "### Pinky (Stub Backend) Tests" >> review_summary.txt
+          echo "" >> review_summary.txt
+          export TMPDIR="$(pwd)/target/tmp"
+          cargo test --locked -p rusty-genius-brain-teaser --no-default-features 2>&1 | tee -a review_summary.txt
+          echo "" >> review_summary.txt
+        continue-on-error: true
+
       - name: Run code review analysis
         id: review
         run: |
@@ -56,9 +72,18 @@ jobs:
           cat > "${REVIEW_FILE}" << 'EOF'
           # Automated Code Review - $(date +%Y-%m-%d)
           
-          ## Cargo Check & Clippy Analysis
+          ## Test Results
           
           EOF
+          
+          # Append test summary
+          if [ -f review_summary.txt ]; then
+            cat review_summary.txt >> "${REVIEW_FILE}"
+          fi
+          
+          echo "" >> "${REVIEW_FILE}"
+          echo "## Cargo Check & Clippy Analysis" >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
           
           # Run cargo check
           echo "### Build Check" >> "${REVIEW_FILE}"
