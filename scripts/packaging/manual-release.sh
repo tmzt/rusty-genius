@@ -30,3 +30,5 @@ echo "release-plz version: $(release-plz --version)"
 # Run release
 # Matches the behavior of the GitHub Action but runs locally
 release-plz release
+
+./update-site-crates.sh
