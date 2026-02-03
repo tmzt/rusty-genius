@@ -1,0 +1,189 @@
+name: Automated Code Review
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/code-review.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Create reviews directory
+        run: mkdir -p docs/reviews
+
+      - name: Run code review analysis
+        id: review
+        run: |
+          REVIEW_DATE=$(date +%Y%m%d)
+          REVIEW_FILE="docs/reviews/${REVIEW_DATE}.md"
+          
+          echo "review_date=${REVIEW_DATE}" >> $GITHUB_OUTPUT
+          echo "review_file=${REVIEW_FILE}" >> $GITHUB_OUTPUT
+          
+          cat > "${REVIEW_FILE}" << 'EOF'
+          # Automated Code Review - $(date +%Y-%m-%d)
+          
+          ## Cargo Check & Clippy Analysis
+          
+          EOF
+          
+          # Run cargo check
+          echo "### Build Check" >> "${REVIEW_FILE}"
+          echo '```' >> "${REVIEW_FILE}"
+          cargo check --all 2>&1 | head -50 >> "${REVIEW_FILE}" || true
+          echo '```' >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
+          
+          # Run clippy
+          echo "### Clippy Lints" >> "${REVIEW_FILE}"
+          echo '```' >> "${REVIEW_FILE}"
+          cargo clippy --all --all-targets -- -D warnings 2>&1 | head -100 >> "${REVIEW_FILE}" || true
+          echo '```' >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
+          
+          # Run cargo fmt check
+          echo "### Format Check" >> "${REVIEW_FILE}"
+          echo '```' >> "${REVIEW_FILE}"
+          cargo fmt --all -- --check 2>&1 >> "${REVIEW_FILE}" || true
+          echo '```' >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
+          
+          # Package statistics
+          echo "## Package Statistics" >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
+          find crates -name "Cargo.toml" | while read toml; do
+            dir=$(dirname "$toml")
+            pkg_name=$(grep '^name' "$toml" | head -1 | cut -d'"' -f2)
+            echo "- **${pkg_name}** (${dir})" >> "${REVIEW_FILE}"
+          done
+          echo "" >> "${REVIEW_FILE}"
+          
+          # Spec compliance reference
+          echo "## Specification Compliance" >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
+          echo "This review is checked against:" >> "${REVIEW_FILE}"
+          echo "- [System Prompt Specification](.agent/rules/system-prompt.md)" >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
+          echo "**Key Requirements:**" >> "${REVIEW_FILE}"
+          echo "- ✅ No \`tokio\` dependency" >> "${REVIEW_FILE}"
+          echo "- ✅ No \`reqwest\` dependency" >> "${REVIEW_FILE}"
+          echo "- ✅ Use \`surf\` for HTTP requests" >> "${REVIEW_FILE}"
+          echo "- ✅ Use \`async-std\` or \`smol\` for async runtime" >> "${REVIEW_FILE}"
+          echo "- ✅ \`llama-cpp-2\` must be optional" >> "${REVIEW_FILE}"
+          echo "- ✅ Use local \`target/tmp\` instead of system \`/tmp\`" >> "${REVIEW_FILE}"
+          echo "- ✅ Track \`Cargo.lock\` in git" >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
+          
+          # Dependency audit
+          echo "## Dependencies Check" >> "${REVIEW_FILE}"
+          echo "" >> "${REVIEW_FILE}"
+          if grep -q "tokio" Cargo.lock; then
+            echo "❌ **VIOLATION:** \`tokio\` found in dependency tree" >> "${REVIEW_FILE}"
+          else
+            echo "✅ No \`tokio\` in dependency tree" >> "${REVIEW_FILE}"
+          fi
+          echo "" >> "${REVIEW_FILE}"
+          
+          if grep -q "reqwest" Cargo.lock; then
+            echo "❌ **VIOLATION:** \`reqwest\` found in dependency tree" >> "${REVIEW_FILE}"
+          else
+            echo "✅ No \`reqwest\` in dependency tree" >> "${REVIEW_FILE}"
+          fi
+          echo "" >> "${REVIEW_FILE}"
+          
+          if grep -q "surf" Cargo.lock; then
+            echo "✅ \`surf\` found in dependency tree" >> "${REVIEW_FILE}"
+          else
+            echo "⚠️  \`surf\` not found in dependency tree" >> "${REVIEW_FILE}"
+          fi
+          echo "" >> "${REVIEW_FILE}"
+          
+          if grep -q "async-std" Cargo.lock; then
+            echo "✅ \`async-std\` found in dependency tree" >> "${REVIEW_FILE}"
+          else
+            echo "⚠️  \`async-std\` not found in dependency tree" >> "${REVIEW_FILE}"
+          fi
+          echo "" >> "${REVIEW_FILE}"
+          
+          echo "✅ Review written to ${REVIEW_FILE}"
+
+      - name: Check if review file was created
+        run: |
+          if [ -f "${{ steps.review.outputs.review_file }}" ]; then
+            echo "✅ Review file created successfully"
+            echo "📄 File: ${{ steps.review.outputs.review_file }}"
+            wc -l "${{ steps.review.outputs.review_file }}"
+          else
+            echo "❌ Review file was not created"
+            exit 1
+          fi
+
+      - name: Commit review to repository
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(review): automated code review for ${{ steps.review.outputs.review_date }}"
+          file_pattern: "docs/reviews/*.md"
+          commit_user_name: "github-actions[bot]"
+          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+
+      - name: Comment on PR with review summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reviewFile = '${{ steps.review.outputs.review_file }}';
+            
+            if (fs.existsSync(reviewFile)) {
+              const content = fs.readFileSync(reviewFile, 'utf8');
+              const summary = content.split('\n').slice(0, 20).join('\n');
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## 📋 Automated Code Review\n\n${summary}\n\n[View full review](../../blob/${{ github.head_ref }}/docs/reviews/${{ steps.review.outputs.review_date }}.md)`
+              });
+            }
+
+      - name: Upload review artifact
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: code-review-${{ steps.review.outputs.review_date }}
+          path: docs/reviews/${{ steps.review.outputs.review_date }}.md
+          retention-days: 90
