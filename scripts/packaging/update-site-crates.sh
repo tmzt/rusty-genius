@@ -9,17 +9,20 @@ echo "   New Version: $NEW_VERSION"
 
 echo "📝 Updating documentation..."
 
+SITE_DIR="./site"
+echo "   SITE_DIR: $SITE_DIR"
+
 # Update README.md: Badges and Dependency
 # Mac sed requires -i ''
 sed -i '' "s/crates.io-v[0-9.]*-orange/crates.io-v$NEW_VERSION-orange/g" README.md
 sed -i '' "s/version = \"[0-9.]*\"/version = \"$NEW_VERSION\"/g" README.md
 
 # Update site/index.html: Dependency
-sed -i '' "s/version = \"[0-9.]*\"/version = \"$NEW_VERSION\"/g" site/index.html
+sed -i '' "s/version = \"[0-9.]*\"/version = \"$NEW_VERSION\"/g" $SITE_DIR/index.html
 
 echo "   README.md and site/index.html updated."
 
-git add -u README.md ./site/index.html
+git add -u README.md $SITE_DIR/index.html
 
 git commit -m "(chore) site: update crate versions"
 
