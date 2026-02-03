@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 // --- Pinky (Stub) ---
 
+#[derive(Default)]
 pub struct Pinky {
     model_loaded: bool,
 }
@@ -33,14 +34,6 @@ pub struct Pinky {
 impl Pinky {
     pub fn new() -> Self {
         Self::default()
-    }
-}
-
-impl Default for Pinky {
-    fn default() -> Self {
-        Self {
-            model_loaded: false,
-        }
     }
 }
 

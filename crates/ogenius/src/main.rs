@@ -107,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
             while let Some(output) = output_rx.next().await {
                 match output {
                     BrainstemOutput::Asset(AssetEvent::Complete(_)) => break,
-                    BrainstemOutput::Asset(AssetEvent::Progress(curr, _)) if curr == 0 => {
+                    BrainstemOutput::Asset(AssetEvent::Progress(0, _)) => {
                         // Just waiting
                     }
                     BrainstemOutput::Error(e) => {

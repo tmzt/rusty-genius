@@ -92,8 +92,7 @@ impl Orchestrator {
                                 if let AssetEvent::Complete(path) = &event {
                                     path_to_load = path.clone();
                                 }
-                                if let Err(_) = output_tx.send(BrainstemOutput::Asset(event)).await
-                                {
+                                if output_tx.send(BrainstemOutput::Asset(event)).await.is_err() {
                                     break;
                                 }
                             }
@@ -111,9 +110,10 @@ impl Orchestrator {
                                     while let Some(event_res) = event_rx.next().await {
                                         match event_res {
                                             Ok(event) => {
-                                                if let Err(_) = output_tx
+                                                if output_tx
                                                     .send(BrainstemOutput::Event(event))
                                                     .await
+                                                    .is_err()
                                                 {
                                                     break; // Receiver dropped
                                                 }

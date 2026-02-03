@@ -61,7 +61,7 @@ impl AssetAuthority {
             }
         });
 
-        while let Some(_) = rx.next().await {}
+        while rx.next().await.is_some() {}
         handle.await
     }
 
