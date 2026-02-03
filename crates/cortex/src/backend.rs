@@ -32,6 +32,12 @@ pub struct Pinky {
 
 impl Pinky {
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for Pinky {
+    fn default() -> Self {
         Self {
             model_loaded: false,
         }
@@ -104,6 +110,13 @@ pub struct Brain {
 #[cfg(feature = "real-engine")]
 impl Brain {
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[cfg(feature = "real-engine")]
+impl Default for Brain {
+    fn default() -> Self {
         Self {
             model: None,
             backend: Arc::new(LlamaBackend::init().expect("Failed to init llama backend")),

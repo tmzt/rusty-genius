@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 const DEFAULT_MODELS: &str = include_str!("models.toml");
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct RegistryFile {
     models: Vec<ModelEntry>,
 }
