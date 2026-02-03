@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Asset management and model downloading for rusty-genius"
 readme = "../../README.md"
-keywords = ["ai", "llm", "huggingface", "download", "assets"]
+keywords = ["ai", "llm", "huggingface", "download", "models"]
 categories.workspace = true
 publish.workspace = true
 

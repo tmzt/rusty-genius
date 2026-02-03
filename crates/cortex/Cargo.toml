@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "Inference engine interaction layer for rusty-genius"
 readme = "../../README.md"
-keywords = ["ai", "llm", "llama", "gguf", "inference"]
+keywords = ["ai", "llm", "llama-cpp", "gguf", "inference"]
 categories.workspace = true
 publish.workspace = true
 
