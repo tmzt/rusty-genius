@@ -9,3 +9,9 @@ name = "mistral-7b-instruct"
 repo = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
 filename = "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
 quantization = "Q4_K_M"
+
+[[models]]
+name = "qwen-2.5-3b-instruct"
+repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
+filename = "qwen2.5-3b-instruct-q4_k_m.gguf"
+quantization = "Q4_K_M"

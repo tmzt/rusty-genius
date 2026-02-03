@@ -4,9 +4,9 @@ trigger: always_on
 
 Here is the **Finalized System Generation Prompt**.
 
-I have added the requirement for `scripts/fix.sh` to handle intentional lockfile updates, differentiating them from the strict `--locked` requirement for builds and tests.
+I have updated **Section 3 (Implementation Directives)** to explicitly allow `async-std` or `smol` while strictly prohibiting `tokio`.
 
-You can paste this directly into your LLM.
+You can paste this entire block directly into your LLM.
 
 ---
 
@@ -14,7 +14,7 @@ You can paste this directly into your LLM.
 
 You are an expert Systems Architect and Rust Developer. You are tasked with generating the codebase for `rusty-genius`, a modular, local-first AI orchestration library.
 
-Proceed to generate the solution based on the **System Specification**, **Component Logic**, and **Implementation Directives** below.
+Proceed to generate the solution based on the **System Specification**, **Component Logic**, **Implementation Directives**, **Order of Battle**, and **Validation Plan** below.
 
 ---
 
@@ -88,7 +88,14 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 
 ### B. Asset Management (`facecrab`)
 
-* **Error Handling:** Use **`anyhow`** internally for file I/O and network operations, mapping them to `GeniusError` at the public boundary.
+* **Network Stack:**
+* **Strict Requirement:** You must use **`surf`** for all HTTP requests.
+* **Runtime:** Configure `surf` to use `smol` or `async-std`.
+* **Forbidden:** Do **not** use `reqwest` or `tokio` for the downloader.
+* **Streams:** Use **`futures`** for handling download streams.
+
+
+* **Error Handling:** Use **`anyhow`** internally, mapping to `GeniusError`.
 * **Registry:** Manage `registry.toml`.
 * **Delegation:** `ensure_model` checks Registry  Resolves HF Filename  Downloads  Updates Registry.
 * **Defaults:** Embed `models.toml` via `include_str!`.
@@ -112,46 +119,143 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 
 * **Fixtures:** Scan `fixtures/{ORG}/{REPO}/{QUANT}/{TEST}.md`.
 * **Harness:** Inject `ModelSpec` from path, trigger download, run inference.
+* **Embedded Test Data:**
+* You must generate physical fixture files in `crates/brainteaser/fixtures/` targeting **low-RAM models (<4GB)**.
+* **Target Model 1:** `Qwen/Qwen2.5-1.5B-Instruct` (Quant: `Q4_K_M`) -> Very fast, ~1GB RAM.
+* **Target Model 2:** `Qwen/Qwen2.5-3B-Instruct` (Quant: `Q4_K_M`) -> Robust, ~2.5GB RAM.
+* **Fixture Content:** The `.md` files should contain simple prompts (e.g., "What is the capital of France?" or "Write a hello world in Rust") to verify the pipeline.
+
+
 
 ---
 
 ## 3. Implementation Directives
 
 1. **Build Configuration:**
-* **Strict Locking:** All `cargo` commands in standard scripts, documentation, and CI instructions must use the **`--locked`** flag (e.g., `cargo build --locked`, `cargo test --locked`). This ensures reproducible builds by strictly adhering to `Cargo.lock`.
+* **Git Ignore Strategy:** Ensure `Cargo.lock` is **NOT** ignored (it must be tracked).
+* **Library Warning:** Add a comment in `.gitignore` or `README.md` stating: *"NOTE: Cargo.lock is tracked for development stability. Restore to .gitignore before publishing to crates.io."*
 * `cortex/Cargo.toml`: `llama-cpp-2` is `optional = true`.
 * `genius/Cargo.toml`: Expose `metal` and `cuda` features, forwarding them to `cortex`.
 * Default workspace behavior: **Stubbed (Pinky)**.
 
 
-2. **Error Strategy:**
-* **Inside Crates (`facecrab`, `cortex`, `stem`):** Use `anyhow::Result` for implementation flexibility.
-* **In Core (`rusty-genius-core`):** Define explicit error types using `thiserror`.
-* **At Boundaries:** When sending errors over the `BrainstemOutput` channel, convert `anyhow` errors to a `String` or a structured `GeniusError` variant.
+2. **Dependencies & Runtime:**
+* **Async Runtime:** You may use either **`smol`** or **`async-std`** for internal crate logic.
+* **Strict Prohibition:** Do **not** use `tokio` as the runtime.
+* **HTTP Client:** `facecrab` must use `surf`. Avoid `reqwest`.
 
 
-3. **Scripts:**
-* **`scripts/metal.sh`:** A helper for running heavy tests.
-* Verify `cmake` exists.
-* Run integration tests using the lockfile: `cargo test --locked -p rusty-genius-brain-teaser --features "rusty-genius-brain-cortex/real-engine rusty-genius-brain-cortex/metal" -- --nocapture`.
+3. **Sandbox Isolation (Temp Files):**
+* **Requirement:** The system must not rely on the OS-default `/tmp` directory.
+* **Implementation:** Configure **all scripts** to create a local temporary directory (e.g., `target/tmp`) and force the process to use it by exporting `TMPDIR`, `TEMP`, and `TMP`.
 
 
-* **`scripts/fix.sh`:** A specific helper for intentionally updating the lockfile (e.g., after adding dependencies).
-* This script should accept cargo arguments but run them *without* `--locked`, or simply run `cargo generate-lockfile` / `cargo check`.
-* **Instruction:** "Run this script only when you have modified `Cargo.toml` and need to sync `Cargo.lock`."
+4. **Scripts:**
+* **`scripts/pinky.sh` (Fast Test):**
+* Runs tests using the **Stubbed Backend**.
+* Command: `cargo test -p rusty-genius-brain-teaser --no-default-features -- --nocapture`
+
+
+* **`scripts/metal.sh` (Real Test):**
+* Runs tests using the **Real Llama.cpp Backend**.
+* Must verify `cmake` exists.
+* Command: `cargo test -p rusty-genius-brain-teaser --features "rusty-genius-brain-cortex/real-engine rusty-genius-brain-cortex/metal" -- --nocapture`
 
 
 
 
-4. **Process Instructions:**
-* **Generative Order:** strictly follow this sequence:
-1. `crates/core` (Protocol)
-2. `crates/facecrab` (Assets)
-3. `crates/cortex` (Stub/Real Engine)
-4. `crates/brainstem` (Orchestrator)
-5. `crates/genius` (Facade)
-6. `crates/brainteaser` (Test Harness)
+
+---
+
+## 4. Order of Battle (Execution Plan)
+
+You must execute the generation in the following strict turns. **At the end of each turn, you must stop and provide a short, concise git commit message.**
+
+**Execution Directive:**
+
+1. **Automate Process:** The Agent (you) must execute the necessary shell commands (creation, compilation, and **testing**) within the turn. Do not ask the user to run commands unless your environment lacks execution permissions.
+2. **Seamless Flow:** Continue working seamlessly from turn to turn.
+3. **Interrupt Policy:** **Only interrupt the user if there is a blocking problem with the build/test execution that you cannot auto-correct.** Otherwise, proceed through the turns automatically.
+
+* **Turn 1: Workspace Initialization**
+* Create directories, `Cargo.toml` (workspace), and the `.gitignore` (tracking `Cargo.lock`).
+* **Commit:** `chore: init workspace and gitignore`
 
 
-* **Commits:** At the completion of each crate or major logical boundary, explicitly provide a **short, concise git commit message** (e.g., `feat(core): implement protocol enums and error definitions`).
+* **Turn 2: Protocol (Core)**
+* Implement `rusty-genius-core` with all Enums, Manifests, and Error types (`thiserror`).
+* **Commit:** `feat(core): implement protocol, manifests, and errors`
 
+
+* **Turn 3: Assets (Facecrab)**
+* Implement `facecrab` using `surf`, `futures`, and either `smol` or `async-std`.
+* Implement Registry logic, Asset Manager, and embedded defaults.
+* **Commit:** `feat(facecrab): implement asset registry and downloader via surf`
+
+
+* **Turn 4: Engine (Cortex)**
+* Implement `rusty-genius-brain-cortex`.
+* Create the `Backend` trait.
+* Implement `PinkyBackend` (Stub) and `LlamaBackend` (Real) guarded by feature flags.
+* **Commit:** `feat(cortex): implement engine with stub and real backends`
+
+
+* **Turn 5: Orchestration (Brainstem)**
+* Implement `rusty-genius-brain-stem`.
+* Connect the Event Loop, implement TTL/Hibernation logic.
+* **Commit:** `feat(stem): implement orchestrator event loop`
+
+
+* **Turn 6: Facade (Genius)**
+* Implement `rusty-genius` re-exports and public API surface.
+* **Commit:** `feat(genius): implement public facade`
+
+
+* **Turn 7: Quality Assurance (Brainteaser) & Data**
+* Implement `rusty-genius-brain-teaser` fixture scanner and test harness.
+* Generate physical fixture files for Qwen models.
+* Create `scripts/pinky.sh` and `scripts/metal.sh` (ensure `chmod +x`).
+* **Commit:** `test(teaser): implement fixture harness, test data, and scripts`
+
+
+* **Turn 8: Intermediate Validation (Automated)**
+* **Action:** The Agent must execute `./scripts/pinky.sh`.
+* **Goal:** Verify the logic and orchestration flow without downloading heavy models.
+* **Commit:** `test: verify pinky stub pipeline`
+
+
+* **Turn 9: Final Validation (Automated Real Engine)**
+* **Action:** The Agent must execute `./scripts/metal.sh` (this will download the ~2.5GB model).
+* **Goal:** Verify real inference.
+* **Recovery:** If this step fails or panics, you must add a "Turn 10" to correct the issues and retry until it passes.
+
+
+
+---
+
+## 5. Overall Validation Plan
+
+If the agent environment cannot execute the scripts in Turn 8/9 due to sandbox limitations, output this final block for the user:
+
+* **Objective:** Ensure the system can download a real model, load it into RAM (within 4GB limit), and generate a coherent response.
+* **Target:** Use the **Qwen2.5-3B-Instruct** fixture generated in **Turn 7**.
+* **Action:**
+```bash
+./scripts/metal.sh
+
+```
+
+
+* **Success Criteria:**
+1. Facecrab successfully downloads the Qwen GGUF (~2.5GB) via `surf`.
+2. The engine boots in `real-engine` mode (with Metal/CUDA if available).
+3. The system processes the fixture prompt.
+4. The system outputs a coherent text response + usage stats.
+
+
+
+---
+
+### **Next Step:**
+
+Begin next turn.

@@ -22,19 +22,35 @@ pub struct ModelEntry {
 
 pub struct ModelRegistry {
     config_dir: PathBuf,
+    cache_dir: PathBuf,
     models: HashMap<String, ModelEntry>,
 }
 
 impl ModelRegistry {
     pub fn new() -> Result<Self> {
-        let config_dir = dirs::config_dir()
-            .context("Could not find config directory")?
-            .join("rusty-genius");
+        let config_dir = if let Ok(home) = std::env::var("GENIUS_HOME") {
+            PathBuf::from(home)
+        } else if let Ok(custom_path) = std::env::var("RUSTY_GENIUS_CONFIG_DIR") {
+            PathBuf::from(custom_path)
+        } else {
+            dirs::config_dir()
+                .context("Could not find config directory")?
+                .join("rusty-genius")
+        };
+
+        // Resolve Cache Directory
+        let cache_dir = if let Ok(cache) = std::env::var("GENIUS_CACHE") {
+            PathBuf::from(cache)
+        } else {
+            config_dir.join("cache")
+        };
 
         fs::create_dir_all(&config_dir)?;
+        fs::create_dir_all(&cache_dir)?;
 
         let mut registry = Self {
             config_dir,
+            cache_dir,
             models: HashMap::new(),
         };
 
@@ -76,6 +92,6 @@ impl ModelRegistry {
     }
 
     pub fn get_cache_dir(&self) -> PathBuf {
-        self.config_dir.join("cache")
+        self.cache_dir.clone()
     }
 }

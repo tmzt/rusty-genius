@@ -10,6 +10,9 @@ pub trait Engine: Send + Sync {
     /// Load a model from a path
     async fn load_model(&mut self, model_path: &str) -> Result<()>;
 
+    /// Unload the currently loaded model to free resources
+    async fn unload_model(&mut self) -> Result<()>;
+
     /// Run inference
     /// Returns a channel of InferenceEvents
     async fn infer(
