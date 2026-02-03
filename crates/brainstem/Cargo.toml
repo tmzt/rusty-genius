@@ -1,8 +1,12 @@
 [package]
 name = "rusty-genius-stem"
-version = "0.1.0"
-edition = "2021"
-publish = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Orchestrator and event loop for rusty-genius"
+publish.workspace = true
 
 [dependencies]
 rusty-genius-core = { path = "../core", version = "0.1.0" }

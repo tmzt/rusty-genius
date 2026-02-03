@@ -8,3 +8,12 @@ members = [
     "crates/brainteaser"
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Timothy Meade"]
+license = "MIT"
+repository = "https://github.com/tmzt/rusty-genius"
+homepage = "https://github.com/tmzt/rusty-genius"
+publish = true

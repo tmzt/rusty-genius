@@ -1,8 +1,12 @@
 [package]
 name = "rusty-genius-teaser"
-version = "0.1.0"
-edition = "2021"
-publish = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Testing harness and verification for rusty-genius"
+publish.workspace = true
 
 [dependencies]
 rusty-genius = { path = "../genius", version = "0.1.0" }

@@ -1,8 +1,12 @@
 [package]
 name = "rusty-genius-core"
-version = "0.1.0"
-edition = "2021"
-publish = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core types and protocol definitions for rusty-genius"
+publish.workspace = true
 
 [dependencies]
 thiserror = "1.0"
