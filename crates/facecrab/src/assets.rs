@@ -1,5 +1,5 @@
 use crate::registry::ModelRegistry;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusty_genius_core::manifest::ModelSpec;
 use rusty_genius_core::GeniusError;
 use std::fs;
@@ -26,63 +26,64 @@ impl AssetAuthority {
         let cache_dir = self.registry.get_cache_dir();
         fs::create_dir_all(&cache_dir)?;
 
+        // Consistently use the filename from the registry/spec
         let path = cache_dir.join(&spec.filename);
         if path.exists() {
+            // Ideally we'd verify the file size or checksum here,
+            // but for now existence is the baseline.
             return Ok(path);
         }
 
-        // 3. Download (Simulated or Real)
+        // 3. Download
         println!("Downloading {} from {}...", spec.filename, spec.repo);
-
-        // Use spec.filename or name.gguf
-        let local_filename = format!("{}.gguf", name);
-        let path = cache_dir.join(&local_filename);
-
-        if path.exists() {
-            return Ok(path);
-        }
-
         self.download_file(&spec, &path).await?;
 
         Ok(path)
     }
 
     // Async download using surf with RedirectMiddleware
-    async fn download_file(&self, spec: &ModelSpec, path: &PathBuf) -> Result<()> {
+    async fn download_file(&self, spec: &ModelSpec, final_path: &PathBuf) -> Result<()> {
         let url = format!(
             "https://huggingface.co/{}/resolve/main/{}",
             spec.repo, spec.filename
         );
 
-        let client = surf::Client::new().with(RedirectMiddleware::new(5));
+        let partial_path = final_path.with_extension("partial");
 
+        let client = surf::Client::new().with(RedirectMiddleware::new(5));
         let mut response = client
             .get(&url)
             .await
             .map_err(|e| anyhow::anyhow!("Surf request failed: {}", e))?;
 
         let status = response.status();
-        if status.is_success() {
-            println!("Downloading to: {:?}", path);
+        if !status.is_success() {
+            return Err(anyhow::anyhow!("Download failed with status: {}", status));
+        }
 
-            // Use std::fs to create file (workaround for potential async fs quirks in some envs)
-            let std_file = std::fs::File::create(path)
-                .map_err(|e| anyhow::anyhow!("Failed to create file (std): {}", e))?;
+        println!("Downloading to: {:?}", final_path);
 
-            // Convert to async-std file
+        // Use a scope to ensure partial file is closed/flushed before renaming
+        {
+            let std_file = std::fs::File::create(&partial_path)
+                .map_err(|e| anyhow::anyhow!("Failed to create partial file: {}", e))?;
+
             let mut file: async_std::fs::File = std_file.into();
 
-            // Copy from response (which implements AsyncRead) to file
-            // response implements AsyncRead in surf 2.3+
-            futures::io::copy(&mut response, &mut file)
-                .await
-                .map_err(|e| anyhow::anyhow!("Streaming failed: {}", e))?;
-
-            println!("Download complete.");
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Download failed with status: {}", status))
+            // Copy from response to partial file
+            if let Err(e) = futures::io::copy(&mut response, &mut file).await {
+                // Cleanup partial file on error
+                let _ = std::fs::remove_file(&partial_path);
+                return Err(anyhow::anyhow!("Streaming failed: {}", e));
+            }
         }
+
+        // Atomic rename (best effort on same filesystem)
+        std::fs::rename(&partial_path, final_path)
+            .map_err(|e| anyhow::anyhow!("Failed to finalize model file: {}", e))?;
+
+        println!("Download complete.");
+        Ok(())
     }
 }
 

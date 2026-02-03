@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use facecrab::AssetAuthority;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;

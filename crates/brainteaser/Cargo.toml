@@ -13,3 +13,6 @@ futures = "0.3"
 
 [features]
 real-engine = ["rusty-genius-brain-cortex/real-engine"]
+metal = ["rusty-genius-brain-cortex/metal", "real-engine"]
+cuda = ["rusty-genius-brain-cortex/cuda", "real-engine"]
+vulkan = ["rusty-genius-brain-cortex/vulkan", "real-engine"]

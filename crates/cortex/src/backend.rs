@@ -16,11 +16,10 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 #[cfg(feature = "real-engine")]
 use llama_cpp_2::model::params::LlamaModelParams;
 #[cfg(feature = "real-engine")]
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
-#[cfg(feature = "real-engine")]
-use llama_cpp_2::token::LlamaToken;
+use llama_cpp_2::model::{AddBos, LlamaModel};
 #[cfg(feature = "real-engine")]
 use std::num::NonZeroU32;
+#[cfg(feature = "real-engine")]
 use std::sync::Arc;
 
 // --- Pinky (Stub) ---

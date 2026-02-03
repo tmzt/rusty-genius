@@ -259,3 +259,31 @@ If the agent environment cannot execute the scripts in Turn 8/9 due to sandbox l
 ### **Next Step:**
 
 Begin next turn.
+
+---
+
+## 6. Security & GitHub Actions Review
+
+All GitHub Actions workflows must be reviewed for:
+
+1. **Security Concerns:**
+   - No hardcoded secrets or credentials
+   - Proper use of GitHub secrets for sensitive data
+   - Least-privilege permissions (jobs and steps)
+   - Safe use of third-party actions (pinned versions)
+   - No dangerous script injection vectors
+
+2. **Best Practices:**
+   - Proper artifact handling and retention
+   - Reasonable job timeouts
+   - Safe git operations (signing commits, atomic operations)
+   - Proper error handling and reporting
+   - Clear job naming and documentation
+
+3. **Specification Compliance:**
+   - Tests use local temp directory isolation (`target/tmp`)
+   - No `tokio`/`reqwest` in dependency tree validation
+   - Validates spec requirements from this prompt
+   - Generates timestamped reports
+
+Review file: `.github/workflows/code-review.yml`
