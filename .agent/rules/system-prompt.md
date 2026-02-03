@@ -46,12 +46,12 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 * **Content:** Asset Downloader, Local Registry (`~/.config/...`), HF API resolution, Embedded Manifests.
 
 
-3. **`crates/cortex`** (`rusty-genius--cortex`):
+3. **`crates/cortex`** (`rusty-genius-cortex`):
 * **Role:** Inference Engine.
 * **Content:** `llama.cpp` bindings (**Optional**), KV Cache, Token Streaming.
 
 
-4. **`crates/brainstem`** (`rusty-genius--stem`):
+4. **`crates/brainstem`** (`rusty-genius-stem`):
 * **Role:** Orchestrator.
 * **Content:** Central Event Loop, Asset delegation, Engine Lifecycle (TTL).
 
@@ -61,7 +61,7 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 * **Content:** Re-exports internal crates.
 
 
-6. **`crates/brainteaser`** (`rusty-genius--teaser`):
+6. **`crates/brainteaser`** (`rusty-genius-teaser`):
 * **Role:** QA/Testing.
 * **Content:** Integration harness using file-system fixtures.
 
@@ -153,13 +153,13 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 4. **Scripts:**
 * **`scripts/pinky.sh` (Fast Test):**
 * Runs tests using the **Stubbed Backend**.
-* Command: `cargo test -p rusty-genius--teaser --no-default-features -- --nocapture`
+* Command: `cargo test -p rusty-genius-teaser --no-default-features -- --nocapture`
 
 
 * **`scripts/metal.sh` (Real Test):**
 * Runs tests using the **Real Llama.cpp Backend**.
 * Must verify `cmake` exists.
-* Command: `cargo test -p rusty-genius--teaser --features "rusty-genius--cortex/real-engine rusty-genius--cortex/metal" -- --nocapture`
+* Command: `cargo test -p rusty-genius-teaser --features "rusty-genius-cortex/real-engine rusty-genius-cortex/metal" -- --nocapture`
 
 
 
@@ -194,14 +194,14 @@ You must execute the generation in the following strict turns. **At the end of e
 
 
 * **Turn 4: Engine (Cortex)**
-* Implement `rusty-genius--cortex`.
+* Implement `rusty-genius-cortex`.
 * Create the `Backend` trait.
 * Implement `PinkyBackend` (Stub) and `LlamaBackend` (Real) guarded by feature flags.
 * **Commit:** `feat(cortex): implement engine with stub and real backends`
 
 
 * **Turn 5: Orchestration (Brainstem)**
-* Implement `rusty-genius--stem`.
+* Implement `rusty-genius-stem`.
 * Connect the Event Loop, implement TTL/Hibernation logic.
 * **Commit:** `feat(stem): implement orchestrator event loop`
 
@@ -212,7 +212,7 @@ You must execute the generation in the following strict turns. **At the end of e
 
 
 * **Turn 7: Quality Assurance (Brainteaser) & Data**
-* Implement `rusty-genius--teaser` fixture scanner and test harness.
+* Implement `rusty-genius-teaser` fixture scanner and test harness.
 * Generate physical fixture files for Qwen models.
 * Create `scripts/pinky.sh` and `scripts/metal.sh` (ensure `chmod +x`).
 * **Commit:** `test(teaser): implement fixture harness, test data, and scripts`

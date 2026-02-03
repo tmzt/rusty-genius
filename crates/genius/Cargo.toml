@@ -6,14 +6,14 @@ edition = "2021"
 [dependencies]
 rusty-genius-core = { path = "../core" }
 facecrab = { path = "../facecrab" }
-rusty-genius--stem = { path = "../brainstem" }
-rusty-genius--cortex = { path = "../cortex" }
+rusty-genius-stem = { path = "../brainstem" }
+rusty-genius-cortex = { path = "../cortex" }
 async-std = { version = "1.12", features = ["attributes"] }
 futures = "0.3"
 
 [features]
 default = []
-metal = ["rusty-genius--cortex/metal", "real-engine"]
-cuda = ["rusty-genius--cortex/cuda", "real-engine"]
-vulkan = ["rusty-genius--cortex/vulkan", "real-engine"]
-real-engine = ["rusty-genius--cortex/real-engine"]
+metal = ["rusty-genius-cortex/metal", "real-engine"]
+cuda = ["rusty-genius-cortex/cuda", "real-engine"]
+vulkan = ["rusty-genius-cortex/vulkan", "real-engine"]
+real-engine = ["rusty-genius-cortex/real-engine"]

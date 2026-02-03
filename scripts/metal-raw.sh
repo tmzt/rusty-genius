@@ -40,4 +40,4 @@ echo "Running tests cleanly (System Config / Local TMP)..."
 echo "Running tests with Metal acceleration..."
 # Run cargo test with specific features enabled
 export CARGO_INCREMENTAL=0
-cargo test --locked -p rusty-genius--teaser --features "real-engine rusty-genius--cortex/metal" -- --nocapture
+cargo test --locked -p rusty-genius-teaser --features "real-engine rusty-genius-cortex/metal" -- --nocapture

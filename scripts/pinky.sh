@@ -18,4 +18,4 @@ echo "Running tests with Stubbed (Pinky) Backend..."
 export CARGO_INCREMENTAL=0
 # Run cargo test for brain-teaser with default features (stub)
 # Ensure we use --test-threads=1 if needed, but default is fine for now
-cargo test --locked -p rusty-genius--teaser -- --nocapture
+cargo test --locked -p rusty-genius-teaser -- --nocapture

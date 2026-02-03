@@ -1,18 +1,18 @@
 [package]
-name = "rusty-genius--teaser"
+name = "rusty-genius-teaser"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 rusty-genius = { path = "../genius" }
 rusty-genius-core = { path = "../core" }
-rusty-genius--cortex = { path = "../cortex" }
+rusty-genius-cortex = { path = "../cortex" }
 anyhow = "1.0"
 async-std = { version = "1.12", features = ["attributes"] }
 futures = "0.3"
 
 [features]
-real-engine = ["rusty-genius--cortex/real-engine"]
-metal = ["rusty-genius--cortex/metal", "real-engine"]
-cuda = ["rusty-genius--cortex/cuda", "real-engine"]
-vulkan = ["rusty-genius--cortex/vulkan", "real-engine"]
+real-engine = ["rusty-genius-cortex/real-engine"]
+metal = ["rusty-genius-cortex/metal", "real-engine"]
+cuda = ["rusty-genius-cortex/cuda", "real-engine"]
+vulkan = ["rusty-genius-cortex/vulkan", "real-engine"]

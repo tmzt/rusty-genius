@@ -1587,13 +1587,21 @@ dependencies = [
  "async-std",
  "facecrab",
  "futures",
- "rusty-genius--cortex",
- "rusty-genius--stem",
  "rusty-genius-core",
+ "rusty-genius-cortex",
+ "rusty-genius-stem",
 ]
 
 [[package]]
-name = "rusty-genius--cortex"
+name = "rusty-genius-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "rusty-genius-cortex"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1605,35 +1613,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "rusty-genius--stem"
+name = "rusty-genius-stem"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-std",
  "facecrab",
  "futures",
- "rusty-genius--cortex",
  "rusty-genius-core",
+ "rusty-genius-cortex",
 ]
 
 [[package]]
-name = "rusty-genius--teaser"
+name = "rusty-genius-teaser"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-std",
  "futures",
  "rusty-genius",
- "rusty-genius--cortex",
  "rusty-genius-core",
-]
-
-[[package]]
-name = "rusty-genius-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "thiserror",
+ "rusty-genius-cortex",
 ]
 
 [[package]]

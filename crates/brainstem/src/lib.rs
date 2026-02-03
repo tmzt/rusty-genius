@@ -3,8 +3,8 @@ use facecrab::AssetAuthority;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
-use rusty_genius_brain_cortex::{create_engine, Engine};
 use rusty_genius_core::protocol::{BrainstemInput, BrainstemOutput};
+use rusty_genius_cortex::{create_engine, Engine};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
