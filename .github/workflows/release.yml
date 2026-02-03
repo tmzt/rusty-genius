@@ -7,36 +7,6 @@ on:
 
 jobs:
 
-  # Notify that manual approval is required for the release environment.
-  notify-approval:
-    name: Notify Approval Needed
-    runs-on: ubuntu-latest
-    environment: rusty-genius-publish
-    if: ${{ github.repository_owner == 'tmzt' }} # REQUIRED FOR SECURITY
-    steps:
-      - name: Provide Approval Link
-        shell: bash
-        run: |
-          echo "## 🛡️ Release Approval Required" >> $GITHUB_STEP_SUMMARY
-          echo "This release requires manual approval because it uses the restricted \`rusty-genius-publish\` environment." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "👉 [Approve Release Here](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
-
-      - name: Validate Environment Secret
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "### 🔍 Environment Validation" >> $GITHUB_STEP_SUMMARY
-          # Check if the secret exists in the specified environment
-          if gh secret list --env rusty-genius-publish | grep -q "CARGO_REGISTRY_TOKEN"; then
-            echo "✅ \`CARGO_REGISTRY_TOKEN\` detected in \`rusty-genius-publish\` environment." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **ERROR**: \`CARGO_REGISTRY_TOKEN\` NOT found in \`rusty-genius-publish\` environment!" >> $GITHUB_STEP_SUMMARY
-            echo "The release will fail even after approval. Please add the secret to the environment first." >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
-
   # Release unpublished packages.
   release-plz-release:
     name: Release-plz release
