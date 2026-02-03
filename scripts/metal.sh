@@ -32,4 +32,4 @@ check_cmake || exit 1
 
 echo "Running tests with Metal acceleration..."
 # Run cargo test with specific features enabled
-cargo test -p rusty-genius-brain-teaser --features "rusty-genius-brain-cortex/real-engine rusty-genius-brain-cortex/metal"
+cargo test --locked -p rusty-genius-brain-teaser --features "rusty-genius-brain-cortex/real-engine rusty-genius-brain-cortex/metal"

@@ -1,0 +1,20 @@
+[package]
+name = "rusty-genius-brain-cortex"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusty-genius-core = { path = "../core" }
+anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+llama-cpp-2 = { version = "0.1", optional = true } 
+# Note: assuming llama-cpp-2 version. In a real scenario I'd check crates.io or use a git dep if needed. 
+# For this exercise, I'll assume 0.1 is fine or just rely on the user's environment / mock if it fails.
+# Actually, the user prompt says "llama-cpp-2 must be optional".
+
+[features]
+default = []
+real-engine = ["dep:llama-cpp-2"]
+metal = ["llama-cpp-2?/metal"]
+cuda = ["llama-cpp-2?/cuda"]

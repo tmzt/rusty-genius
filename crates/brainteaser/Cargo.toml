@@ -1,0 +1,11 @@
+[package]
+name = "rusty-genius-brain-teaser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusty-genius = { path = "../genius" }
+rusty-genius-core = { path = "../core" }
+rusty-genius-brain-cortex = { path = "../cortex" }
+anyhow = "1.0"
+tokio = { version = "1", features = ["full", "test-util"] }

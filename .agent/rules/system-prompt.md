@@ -2,7 +2,11 @@
 trigger: always_on
 ---
 
-Here is the **Final System Generation Prompt**. You can copy and paste this entire block directly into your LLM (Cursor, Claude 3.5 Sonnet, GPT-4o, etc.) to generate the `rusty-genius` codebase.
+Here is the **Finalized System Generation Prompt**.
+
+I have added the requirement for `scripts/fix.sh` to handle intentional lockfile updates, differentiating them from the strict `--locked` requirement for builds and tests.
+
+You can paste this directly into your LLM.
 
 ---
 
@@ -114,6 +118,7 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 ## 3. Implementation Directives
 
 1. **Build Configuration:**
+* **Strict Locking:** All `cargo` commands in standard scripts, documentation, and CI instructions must use the **`--locked`** flag (e.g., `cargo build --locked`, `cargo test --locked`). This ensures reproducible builds by strictly adhering to `Cargo.lock`.
 * `cortex/Cargo.toml`: `llama-cpp-2` is `optional = true`.
 * `genius/Cargo.toml`: Expose `metal` and `cuda` features, forwarding them to `cortex`.
 * Default workspace behavior: **Stubbed (Pinky)**.
@@ -122,14 +127,20 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 2. **Error Strategy:**
 * **Inside Crates (`facecrab`, `cortex`, `stem`):** Use `anyhow::Result` for implementation flexibility.
 * **In Core (`rusty-genius-core`):** Define explicit error types using `thiserror`.
-* **At Boundaries:** When sending errors over the `BrainstemOutput` channel (which must be serializable), convert `anyhow` errors to a `String` or a structured `GeniusError` variant.
+* **At Boundaries:** When sending errors over the `BrainstemOutput` channel, convert `anyhow` errors to a `String` or a structured `GeniusError` variant.
 
 
-3. **Scripts (`scripts/metal.sh`):**
-* Generate a helper script for running heavy tests.
-* It must verify `cmake` exists (checking Homebrew paths `/opt/homebrew/bin` etc).
-* **Crucial:** Add an explicit instruction/comment in the project README and test documentation stating that **integration tests involving real models must ONLY be run via `./scripts/metal.sh**`. Running standard `cargo test` should default to the "Pinky" stub to avoid massive downloads and compilation times during standard development.
-* The script command should look like: `cargo test -p rusty-genius-brain-teaser --features "rusty-genius-brain-cortex/real-engine rusty-genius-brain-cortex/metal" -- --nocapture`
+3. **Scripts:**
+* **`scripts/metal.sh`:** A helper for running heavy tests.
+* Verify `cmake` exists.
+* Run integration tests using the lockfile: `cargo test --locked -p rusty-genius-brain-teaser --features "rusty-genius-brain-cortex/real-engine rusty-genius-brain-cortex/metal" -- --nocapture`.
+
+
+* **`scripts/fix.sh`:** A specific helper for intentionally updating the lockfile (e.g., after adding dependencies).
+* This script should accept cargo arguments but run them *without* `--locked`, or simply run `cargo generate-lockfile` / `cargo check`.
+* **Instruction:** "Run this script only when you have modified `Cargo.toml` and need to sync `Cargo.lock`."
+
+
 
 
 4. **Process Instructions:**
@@ -142,4 +153,5 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 6. `crates/brainteaser` (Test Harness)
 
 
-* **Commits:** At the completion of each crate or major logical boundary, explicitly provide a **short, concise git commit message** (e.g., "feat(core): implement protocol enums and error definitions").
+* **Commits:** At the completion of each crate or major logical boundary, explicitly provide a **short, concise git commit message** (e.g., `feat(core): implement protocol enums and error definitions`).
+
