@@ -16,6 +16,6 @@ authors = ["Timothy Meade"]
 license = "MIT"
 repository = "https://github.com/tmzt/rusty-genius"
 homepage = "https://tmzt.github.io/rusty-genius/"
-keywords = ["ai", "llm", "local-first", "inference", "ai-orchestration", "llama", "llama.cpp", "llama-cpp-2", "async-std", "huggingface"]
+keywords = ["ai", "llm", "local-first", "inference", "async-std"]
 categories = ["science", "algorithms", "asynchronous"]
 publish = true
