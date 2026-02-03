@@ -11,6 +11,7 @@ jobs:
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
+    environment: rusty-genius-publish
     if: ${{ github.repository_owner == 'tmzt' }} # REQUIRED FOR SECURITY
     permissions:
       contents: write
