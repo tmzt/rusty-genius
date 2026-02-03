@@ -6,7 +6,7 @@ mod tests {
     use futures::StreamExt;
     use rusty_genius::Orchestrator;
     use rusty_genius_core::protocol::{
-        BrainstemInput, BrainstemOutput, InferenceEvent, ThoughtEvent,
+        AssetEvent, BrainstemInput, BrainstemOutput, InferenceEvent, ThoughtEvent,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -160,6 +160,12 @@ mod tests {
                         break;
                     }
                 },
+                Ok(Some(BrainstemOutput::Asset(asset_event))) => {
+                    println!("[Asset] Event: {:?}", asset_event);
+                    if let AssetEvent::Error(e) = asset_event {
+                        return Err(anyhow::anyhow!("Asset error: {}", e));
+                    }
+                }
                 Ok(Some(BrainstemOutput::Error(e))) => {
                     return Err(anyhow::anyhow!("Received error from brainstem: {}", e));
                 }
