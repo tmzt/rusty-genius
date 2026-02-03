@@ -2,6 +2,7 @@
 name = "rusty-genius-teaser"
 version = "0.0.1"
 edition = "2021"
+publish = true
 
 [dependencies]
 rusty-genius = { path = "../genius", version = "0.0.1" }
