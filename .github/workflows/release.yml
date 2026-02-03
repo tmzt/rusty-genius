@@ -7,9 +7,23 @@ on:
 
 jobs:
 
+  # Notify that manual approval is required for the release environment.
+  notify-approval:
+    name: Notify Approval Needed
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'tmzt' }}
+    steps:
+      - name: Provide Approval Link
+        run: |
+          echo "## 🛡️ Release Approval Required" >> $GITHUB_STEP_SUMMARY
+          echo "This release requires manual approval because it uses the restricted \`rusty-genius-publish\` environment." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "👉 [Approve Release Here](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+
   # Release unpublished packages.
   release-plz-release:
     name: Release-plz release
+    needs: notify-approval
     runs-on: ubuntu-latest
     environment: rusty-genius-publish
     if: ${{ github.repository_owner == 'tmzt' }} # REQUIRED FOR SECURITY
