@@ -1,13 +1,13 @@
 [package]
 name = "rusty-genius"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-rusty-genius-core = { path = "../core" }
-facecrab = { path = "../facecrab" }
-rusty-genius-stem = { path = "../brainstem" }
-rusty-genius-cortex = { path = "../cortex" }
+rusty-genius-core = { path = "../core", version = "0.0.1" }
+facecrab = { path = "../facecrab", version = "0.0.1" }
+rusty-genius-stem = { path = "../brainstem", version = "0.0.1" }
+rusty-genius-cortex = { path = "../cortex", version = "0.0.1" }
 async-std = { version = "1.12", features = ["attributes"] }
 futures = "0.3"
 

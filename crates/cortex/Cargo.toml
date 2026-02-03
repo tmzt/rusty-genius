@@ -1,10 +1,10 @@
 [package]
 name = "rusty-genius-cortex"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 
 [dependencies]
-rusty-genius-core = { path = "../core" }
+rusty-genius-core = { path = "../core", version = "0.0.1" }
 anyhow = "1.0"
 async-std = "1.12"
 futures = "0.3"
