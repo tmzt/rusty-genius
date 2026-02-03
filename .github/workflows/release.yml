@@ -10,7 +10,6 @@ jobs:
   # Release unpublished packages.
   release-plz-release:
     name: Release-plz release
-    needs: notify-approval
     runs-on: ubuntu-latest
     environment: rusty-genius-publish
     if: ${{ github.repository_owner == 'tmzt' }} # REQUIRED FOR SECURITY
