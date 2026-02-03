@@ -177,13 +177,15 @@ jobs:
           fi
 
       - name: Commit review to repository
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore(review): automated code review for ${{ steps.review.outputs.review_date }}"
           file_pattern: "docs/reviews/*.md"
           commit_user_name: "github-actions[bot]"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_options: "--no-verify"
+          push_options: "--force-with-lease"
 
       - name: Comment on PR with review summary
         if: github.event_name == 'pull_request'
