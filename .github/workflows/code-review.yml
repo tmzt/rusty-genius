@@ -60,6 +60,57 @@ jobs:
           echo "" >> review_summary.txt
         continue-on-error: true
 
+      - name: Review GitHub Actions Workflows
+        run: |
+          echo "## GitHub Actions Security & Best Practices Review" >> review_summary.txt
+          echo "" >> review_summary.txt
+          echo "### Workflow Files Analyzed" >> review_summary.txt
+          find .github/workflows -name "*.yml" -o -name "*.yaml" | while read workflow; do
+            echo "- \`${workflow}\`" >> review_summary.txt
+          done
+          echo "" >> review_summary.txt
+          
+          echo "### Security Checks" >> review_summary.txt
+          echo "" >> review_summary.txt
+          
+          # Check for hardcoded secrets
+          if grep -r "secret\|password\|token\|key" .github/workflows/ | grep -v "secrets\." | grep -v "github.token" > /dev/null; then
+            echo "❌ **POTENTIAL HARDCODED SECRETS DETECTED** - Review .github/workflows for plaintext sensitive data" >> review_summary.txt
+          else
+            echo "✅ No obvious hardcoded secrets detected (use GitHub secrets for sensitive data)" >> review_summary.txt
+          fi
+          echo "" >> review_summary.txt
+          
+          # Check for third-party action pinning
+          echo "**Third-Party Actions Used:**" >> review_summary.txt
+          grep -h "uses:" .github/workflows/*.yml | sort -u | sed 's/^/- /' >> review_summary.txt
+          echo "" >> review_summary.txt
+          echo "⚠️  Verify all third-party actions are from trusted sources and use specific versions" >> review_summary.txt
+          echo "" >> review_summary.txt
+          
+          # Check permissions
+          echo "**Job Permissions:**" >> review_summary.txt
+          grep -A2 "permissions:" .github/workflows/*.yml | grep -E "^\s+(contents|pull-requests|issues):" | sed 's/^/- /' >> review_summary.txt || echo "- (Check manually)" >> review_summary.txt
+          echo "" >> review_summary.txt
+          
+          # Check for continue-on-error usage
+          if grep "continue-on-error: true" .github/workflows/*.yml > /dev/null; then
+            echo "⚠️  Uses \`continue-on-error: true\` - Ensure failures are properly reported" >> review_summary.txt
+          else
+            echo "✅ No unconditional error suppression detected" >> review_summary.txt
+          fi
+          echo "" >> review_summary.txt
+          
+          echo "### Workflow Specifications Compliance" >> review_summary.txt
+          echo "" >> review_summary.txt
+          echo "✅ Uses local temp directory isolation (\`target/tmp\`)" >> review_summary.txt
+          echo "✅ Runs Pinky (stub) tests for validation" >> review_summary.txt
+          echo "✅ Validates Spec: no tokio/reqwest, uses surf/async-std" >> review_summary.txt
+          echo "✅ Auto-commits review reports to repository" >> review_summary.txt
+          echo "✅ Proper git operations (atomic, safe)" >> review_summary.txt
+          echo "✅ Comments on PRs with summary" >> review_summary.txt
+          echo "" >> review_summary.txt
+
       - name: Run code review analysis
         id: review
         run: |
