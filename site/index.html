@@ -427,9 +427,10 @@
             <nav>
                 <a href="#about">About</a>
                 <a href="#architecture">Architecture</a>
+                <a href="#cli">CLI</a>
+                <a href="#install">Install Library</a>
                 <a href="#configuration">Configuration</a>
-                <a href="#install">Install</a>
-                <a href="#usage">Usage</a>
+                <a href="#try-it-out">Try It Out</a>
                 <a href="https://github.com/tmzt/rusty-genius" target="_blank">GitHub</a>
             </nav>
         </div>
@@ -474,42 +475,9 @@
                 </div>
             </section>
 
-            <section id="configuration" class="install">
-                <h2>Configuration</h2>
-                <p style="margin-bottom: 1rem; color: #8b949e;">Control behavior via environment variables or a local
-                    registry:</p>
-
-                <div style="overflow-x: auto; margin-bottom: 2rem;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
-                        <tr style="border-bottom: 1px solid #30363d; text-align: left; color: var(--accent-stem);">
-                            <th style="padding: 0.5rem;">Variable</th>
-                            <th style="padding: 0.5rem;">Description</th>
-                        </tr>
-                        <tr style="border-bottom: 1px solid #30363d;">
-                            <td style="padding: 0.5rem; font-family: var(--font-mono);">GENIUS_HOME</td>
-                            <td style="padding: 0.5rem; color: #8b949e;">Base config dir (~/.config/rusty-genius)</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid #30363d;">
-                            <td style="padding: 0.5rem; font-family: var(--font-mono);">GENIUS_CACHE</td>
-                            <td style="padding: 0.5rem; color: #8b949e;">Model storage path ($HOME/cache)</td>
-                        </tr>
-                    </table>
-                </div>
-
-                <h4 style="color: var(--accent-facecrab); margin-bottom: 0.5rem;">Injected Manifest API</h4>
-                <p style="font-size: 0.9rem; color: #8b949e; margin-bottom: 1rem;">Extend the registry by creating
-                    <code>registry.toml</code> in your home directory. This allows you to "inject" any HuggingFace model
-                    directly into the orchestrator.
-                </p>
-                <pre><code class="language-toml">[[models]]
-name = "my-local-model"
-repo = "Org/Repo-GGUF"
-filename = "model.Q4_K_M.gguf"
-quantization = "Q4_K_M"</code></pre>
-            </section>
 
             <section id="architecture">
-                <h2>Main Components</h2>
+                <h2>Architecture</h2>
                 <div class="architecture">
 
                     <div class="component-card">
@@ -535,13 +503,91 @@ quantization = "Q4_K_M"</code></pre>
                 </div>
             </section>
 
+            <section id="cli" class="install">
+                <h2>Command Line Usage</h2>
+                <p style="margin-bottom: 1rem; color: #8b949e;">The <code>ogenius</code> CLI provides an interactive
+                    chat REPL and an OpenAI-compatible API server, with automatic model downloading from Huggingface.
+                </p>
+
+                <h4 style="color: var(--accent-rust); margin: 1.5rem 0 0.5rem; font-size: 0.9rem;">Quick Install</h4>
+                <pre><code class="language-bash"># Standard install (CPU only)
+cargo install ogenius
+
+# Install with Metal (macOS)
+brew install cmake
+cargo install ogenius --features metal
+
+# Install with CUDA (cross-platform)
+cargo install ogenius --features cuda
+
+# Install with Vulkan (cross-platform)
+cargo install ogenius --features vulkan</code></pre>
+
+                <h4 style="color: var(--accent-stem); margin: 1.5rem 0 0.5rem; font-size: 0.9rem;">Basic Usage</h4>
+                <pre><code class="language-bash"># Download a model
+ogenius download Qwen/Qwen2.5-1.5B-Instruct
+
+# Start interactive chat
+ogenius chat --model Qwen/Qwen2.5-1.5B-Instruct
+
+# Run the API & Web Server (defaults to port 8080)
+ogenius serve --model Qwen/Qwen2.5-1.5B-Instruct</code></pre>
+            </section>
+
             <section id="install" class="install">
-                <h2>Installation</h2>
+                <h2>Library Usage</h2>
                 <p style="margin-bottom: 1rem; color: #8b949e;">Add Rusty-Genius to your project's
                     <code>Cargo.toml</code>:
                 </p>
                 <pre><code class="language-toml">[dependencies]
-rusty-genius = { version = "0.1.1", features = ["metal"] }</code></pre>
+rusty-genius = { version = "0.1.2", features = ["metal"] }</code></pre>
+
+                <p style="margin: 1rem 0; color: #8b949e;">or use:</p>
+                <pre><code class="language-bash">cargo add rusty-genius --features metal</code></pre>
+            </section>
+
+            <section id="configuration" class="install">
+                <h2>Configuration</h2>
+                <p style="margin-bottom: 1rem; color: #8b949e;">Control behavior via environment variables or manifest
+                    files:</p>
+
+                <div style="overflow-x: auto; margin-bottom: 2rem;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                        <tr style="border-bottom: 1px solid #30363d; text-align: left; color: var(--accent-stem);">
+                            <th style="padding: 0.5rem;">Variable</th>
+                            <th style="padding: 0.5rem;">Description</th>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #30363d;">
+                            <td style="padding: 0.5rem; font-family: var(--font-mono);">GENIUS_HOME</td>
+                            <td style="padding: 0.5rem; color: #8b949e;">Base config dir (~/.config/rusty-genius)</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #30363d;">
+                            <td style="padding: 0.5rem; font-family: var(--font-mono);">GENIUS_CACHE</td>
+                            <td style="padding: 0.5rem; color: #8b949e;">Model storage & dynamic registry path</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div class="background-grid" style="margin-bottom: 2rem;">
+                    <div class="bg-card">
+                        <h3>manifest.toml</h3>
+                        <p>Static, user-editable file in the config directory to extend the built-in model list.</p>
+                    </div>
+                    <div class="bg-card">
+                        <h3>registry.toml</h3>
+                        <p>Dynamically updated index in the cache directory tracking all downloaded models.</p>
+                    </div>
+                </div>
+
+                <h4 style="color: var(--accent-facecrab); margin-bottom: 0.5rem;">Extension API</h4>
+                <p style="font-size: 0.9rem; color: #8b949e; margin-bottom: 1rem;">Extend the registry by creating
+                    <code>manifest.toml</code> in your home directory.
+                </p>
+                <pre><code class="language-toml">[[models]]
+name = "my-local-model"
+repo = "Org/Repo-GGUF"
+filename = "model.Q4_K_M.gguf"
+quantization = "Q4_K_M"</code></pre>
             </section>
 
             <section id="try-it-out" class="install">

@@ -1,4 +1,4 @@
-use crate::manifest::InferenceConfig;
+pub use crate::manifest::InferenceConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

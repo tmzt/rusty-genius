@@ -87,11 +87,36 @@ impl AssetAuthority {
     ) -> Result<PathBuf> {
         let _ = tx.send(AssetEvent::Started(name.to_string())).await;
 
-        let spec = self.registry.resolve(name).ok_or_else(|| {
+        let spec = if let Some(s) = self.registry.resolve(name) {
+            s
+        } else if name.contains('/') {
+            // Heuristic: If it contains '/', treat as Repo/Repo-GGUF:filename:quant
+            // and try to parse it.
+            // For now, let's assume Repo/Repo/filename pattern if possible or default.
+            // But let's check if the user wanted a specific format.
+            // Actually, let's just allow downloading by registry name mainly.
+            // If it's a Repo, we might need more info.
+
+            let parts: Vec<&str> = name.split(':').collect();
+            if parts.len() >= 2 {
+                ModelSpec {
+                    repo: parts[0].to_string(),
+                    filename: parts[1].to_string(),
+                    quantization: parts.get(2).unwrap_or(&"Q4_K_M").to_string(),
+                }
+            } else {
+                let err = format!(
+                    "Model '{}' not found and invalid Repo/Repo:filename format",
+                    name
+                );
+                let _ = tx.try_send(AssetEvent::Error(err.clone()));
+                return Err(GeniusError::ManifestError(err).into());
+            }
+        } else {
             let err = format!("Model '{}' not found in registry", name);
             let _ = tx.try_send(AssetEvent::Error(err.clone()));
-            GeniusError::ManifestError(err)
-        })?;
+            return Err(GeniusError::ManifestError(err).into());
+        };
 
         let cache_dir = self.registry.get_cache_dir();
         fs::create_dir_all(&cache_dir)?;
@@ -109,6 +134,17 @@ impl AssetAuthority {
         }
         self.download_file_with_events(&spec, &path, tx.clone())
             .await?;
+
+        // If it was a new model (resolved via heuristic), record it
+        if self.registry.resolve(name).is_none() {
+            let mut registry = ModelRegistry::new()?;
+            registry.record_model(crate::registry::ModelEntry {
+                name: name.to_string(),
+                repo: spec.repo.clone(),
+                filename: spec.filename.clone(),
+                quantization: spec.quantization.clone(),
+            })?;
+        }
 
         let _ = tx
             .send(AssetEvent::Complete(path.display().to_string()))

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Refined Model Configuration**: Transitioned to a dual-file configuration system: `manifest.toml` for static user extensions and `registry.toml` for dynamic system tracking of model assets.
+- *Note: This implementation aligns the library with its intended local-first architecture, separating static user intent from dynamic system state.*
+
 ## [0.1.2](https://github.com/tmzt/rusty-genius/compare/rusty-genius-v0.1.1...rusty-genius-v0.1.2) - 2026-02-03
 
 ### Other

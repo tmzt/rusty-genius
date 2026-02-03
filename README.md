@@ -1,6 +1,6 @@
 # rusty-genius
 
-[![crates.io](https://img.shields.io/badge/crates.io-v0.1.1-orange)](https://crates.io/crates/rusty-genius)
+[![crates.io](https://img.shields.io/badge/crates.io-v0.1.2-orange)](https://crates.io/crates/rusty-genius)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Runtime: async-std](https://img.shields.io/badge/runtime-async--std-blue)](https://async.rs/)
 [![Bindings: llama-cpp-2](https://img.shields.io/badge/bindings-llama--cpp--2-purple)](https://crates.io/crates/llama-cpp-2)
@@ -36,46 +36,53 @@ graph TD
     User([User App]) --> Genius["rusty-genius Facade"]
     Genius --> Brainstem["orchestrator :: rust-genius-stem"]
     Brainstem --> Cortex["engine :: rust-genius-cortex"]
-    Brainstem --> Facecrab["assets :: facecrab"]
-    Cortex --> Llama["llama.cpp / Pinky Stub"]
-    Facecrab --> HF["HuggingFace / Local Registry"]
 ```
 
-### Integration Crates
+## Command Line Usage
 
-- **Facecrab (`facecrab`)**: The Supplier. An autonomous asset authority that handles model resolution (HuggingFace), registry management, and downloads.
+The `ogenius` CLI provides an interactive chat REPL and an OpenAI-compatible API server, with automatic model downloading from Huggingface.
 
-This crate is also usable as an independent crate. It provides a simple interface for downloading and managing models directly via `async fn` calls or a higher-level asynchronous event interface:
+**Quick Install:**
+```bash
+# Standard install (CPU only)
+cargo install ogenius
 
-```rust
-use facecrab::AssetAuthority;
+# Install with Metal (macOS)
+brew install cmake
+cargo install ogenius --features metal
 
-#[async_std::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let authority = AssetAuthority::new()?;
-    
-    // Resolves registry names or direct HF IDs, downloads to local cache automatically
-    // Returns the absolute file path on success
-    let model_path = authority.ensure_model("tiny-model").await?;
-    println!("Model ready at: {:?}", model_path);
-    Ok(())
-}
+# Install with CUDA (cross-platform)
+cargo install ogenius --features cuda
+
+# Install with Vulkan (cross-platform)
+cargo install ogenius --features vulkan
 ```
 
-## Features
+**Basic Usage:**
+```bash
+# Download a model
+ogenius download Qwen/Qwen2.5-1.5B-Instruct
 
-- **Local-First**: No data leaves your machine. No API keys or subscriptions required for core inference.
-- **Modular Design**: Swap or stub components (like the "Pinky" engine stub) for testing and development.
-- **High Performance**: Native hardware acceleration via Metal (macOS), CUDA (Linux/Windows), and Vulkan.
-- **Async Architecture**: Built on `async-std` and `surf` for efficient, non-blocking I/O.
+# Start interactive chat
+ogenius chat --model Qwen/Qwen2.5-1.5B-Instruct
 
-## Installation
+# Run the API & Web Server (defaults to port 8080)
+ogenius serve --model Qwen/Qwen2.5-1.5B-Instruct
+```
+
+## Library Usage
 
 Add `rusty-genius` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rusty-genius = { version = "0.1.1", features = ["metal"] }
+rusty-genius = { version = "0.1.2", features = ["metal"] }
+```
+
+or use
+
+```bash
+cargo add rusty-genius --features metal
 ```
 
 ### Hardware Acceleration
@@ -84,6 +91,40 @@ Enable the appropriate feature for your hardware:
 - **Metal**: `features = ["metal"]` (macOS Apple Silicon/Intel)
 - **CUDA**: `features = ["cuda"]` (NVIDIA GPUs)
 - **Vulkan**: `features = ["vulkan"]` (Generic/Intel GPUs)
+
+## Configuration
+
+Rusty-Genius can be configured via environment variables and manifest files.
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GENIUS_HOME` | Primary directory for configuration and the static manifest. | `~/.config/rusty-genius` |
+| `GENIUS_CACHE` | Directory for downloaded model assets and the dynamic registry. | `$GENIUS_HOME/cache` |
+
+### Configuration Files
+
+The system uses two types of configuration files to manage model awareness:
+
+1.  **`manifest.toml`** (Config Directory): A static, user-editable file used to extend the built-in model list. Use this to "inject" your own GGUF models.
+2.  **`registry.toml`** (Cache Directory): A dynamically updated index maintained by the system. When you use `ogenius download <repo>`, the model details are automatically recorded here.
+
+**Example `manifest.toml`:**
+Location: `~/.config/rusty-genius/manifest.toml`
+
+```toml
+[[models]]
+name = "my-custom-model"
+repo = "TheBloke/Llama-2-7B-Chat-GGUF"
+filename = "llama-2-7b-chat.Q4_K_M.gguf"
+quantization = "Q4_K_M"
+```
+
+Once defined, your model is available by name:
+```bash
+ogenius chat --model my-custom-model
+```
 
 ## Try It Out
 
@@ -111,39 +152,6 @@ cargo run -p rusty-genius --example basic_chat --features metal
 **GPU (NVIDIA / CUDA):**
 ```bash
 cargo run -p rusty-genius --example basic_chat --features cuda
-```
-
-## Configuration
-
-Rusty-Genius can be configured via environment variables and local manifest files.
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GENIUS_HOME` | Primary directory for configuration and the model registry. | `~/.config/rusty-genius` |
-| `GENIUS_CACHE` | Directory where downloaded model assets (.gguf) are stored. | `$GENIUS_HOME/cache` |
-| `RUSTY_GENIUS_CONFIG_DIR` | Alternative override for the configuration directory. | - |
-
-### User Injected Manifest API
-
-The "Injected Manifest" API allows you to extend the system's model awareness without modifying the library. You can "inject" custom models by creating or updating a `registry.toml` file in your `GENIUS_HOME`.
-
-**Location:** `~/.config/rusty-genius/registry.toml`
-
-```toml
-[[models]]
-name = "my-custom-model"
-repo = "TheBloke/Llama-2-7B-Chat-GGUF"
-filename = "llama-2-7b-chat.Q4_K_M.gguf"
-quantization = "Q4_K_M"
-```
-
-Once defined in your local registry, the model can be loaded by its friendly name:
-
-```rust
-// The orchestrator will now treat "my-custom-model" as a first-class citizen
-input.send(BrainstemInput::LoadModel("my-custom-model".into())).await?;
 ```
 
 ## Usage Methods
@@ -254,9 +262,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### 2. Standalone Asset Management
+## Integration Crates
 
-If you only need a high-performance downloader for GGUF/LLM assets with a local registry, you can use `facecrab` directly as shown in the [Integration Crates](#integration-crates) section.
+### 1. Facecrab (`facecrab`)
+
+The Supplier. An autonomous asset authority that handles model resolution (HuggingFace), registry management, and downloads.
+
+This crate is also usable as an independent crate. It provides a simple interface for downloading and managing models directly via `async fn` calls or a higher-level asynchronous event interface:
+
+```rust
+use facecrab::AssetAuthority;
+
+#[async_std::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let authority = AssetAuthority::new()?;
+    
+    // Resolves registry names or direct HF IDs, downloads to local cache automatically
+    // Returns the absolute file path on success
+    let model_path = authority.ensure_model("tiny-model").await?;
+    println!("Model ready at: {:?}", model_path);
+    Ok(())
+}
+```
 
 ## OS Prerequisites
 

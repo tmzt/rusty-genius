@@ -6,7 +6,7 @@ members = [
     "crates/brainstem",
     "crates/genius",
     "crates/brainteaser"
-]
+, "crates/ogenius"]
 default-members = ["crates/genius"]
 resolver = "2"
 

@@ -55,7 +55,8 @@ impl ModelRegistry {
         };
 
         registry.load_defaults()?;
-        registry.load_local()?;
+        registry.load_manifest()?;
+        registry.load_dynamic()?;
 
         Ok(registry)
     }
@@ -68,8 +69,20 @@ impl ModelRegistry {
         Ok(())
     }
 
-    fn load_local(&mut self) -> Result<()> {
-        let registry_path = self.config_dir.join("registry.toml");
+    fn load_manifest(&mut self) -> Result<()> {
+        let manifest_path = self.config_dir.join("manifest.toml");
+        if manifest_path.exists() {
+            let content = fs::read_to_string(manifest_path)?;
+            let parsed: RegistryFile = toml::from_str(&content)?;
+            for model in parsed.models {
+                self.models.insert(model.name.clone(), model);
+            }
+        }
+        Ok(())
+    }
+
+    fn load_dynamic(&mut self) -> Result<()> {
+        let registry_path = self.cache_dir.join("registry.toml");
         if registry_path.exists() {
             let content = fs::read_to_string(registry_path)?;
             let parsed: RegistryFile = toml::from_str(&content)?;
@@ -77,6 +90,35 @@ impl ModelRegistry {
                 self.models.insert(model.name.clone(), model);
             }
         }
+        Ok(())
+    }
+
+    pub fn record_model(&mut self, entry: ModelEntry) -> Result<()> {
+        // Add to in-memory map
+        self.models.insert(entry.name.clone(), entry.clone());
+
+        // Save to cache_dir/registry.toml
+        let registry_path = self.cache_dir.join("registry.toml");
+        let mut entries = Vec::new();
+
+        // If it exists, read existing ones to preserve them
+        if registry_path.exists() {
+            let content = fs::read_to_string(&registry_path)?;
+            if let Ok(parsed) = toml::from_str::<RegistryFile>(&content) {
+                entries = parsed.models;
+            }
+        }
+
+        // Add or update entry
+        if let Some(pos) = entries.iter().position(|e| e.name == entry.name) {
+            entries[pos] = entry;
+        } else {
+            entries.push(entry);
+        }
+
+        let new_content = toml::to_string(&RegistryFile { models: entries })?;
+        fs::write(registry_path, new_content)?;
+
         Ok(())
     }
 
