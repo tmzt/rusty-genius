@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rusty-Genius | Local-First AI Orchestration</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --text-main: #c9d1d9;
+            --text-header: #ffffff;
+            --accent-rust: #dea584;
+            /* Rust-ish orange */
+            --accent-cortex: #58a6ff;
+            /* Blue/Cyan */
+            --accent-facecrab: #d2a8ff;
+            /* Purple/Pink */
+            --accent-stem: #7ee787;
+            /* Green */
+            --glow: 0 0 10px rgba(88, 166, 255, 0.2);
+            --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: url("./assets/images/network-background-subtle.png");
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .main-content {
+            background-color: #0d1117;
+            padding: 2rem;
+            min-height: calc(100vh - 80px);
+            /* Approx 80px for header */
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Header */
+        header {
+            width: 100%;
+            background-color: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid #e1e4e8;
+            padding: 1rem 0;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .header-inner {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #24292f;
+            font-family: var(--font-mono);
+        }
+
+        .logo span {
+            color: var(--accent-rust);
+        }
+
+        nav a {
+            color: #24292f;
+            text-decoration: none;
+            margin-left: 20px;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+
+        nav a:hover {
+            color: var(--accent-cortex);
+        }
+
+        /* Hero Section */
+        .hero {
+            text-align: center;
+            padding: 4rem 0;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            color: var(--text-header);
+            margin-bottom: 1rem;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            color: #8b949e;
+            max-width: 600px;
+            margin: 0 auto 2rem;
+        }
+
+        /* Image Display */
+        .system-diagram {
+            width: 100%;
+            max-width: 800px;
+            margin: 2rem auto;
+            border-radius: 12px;
+            overflow: hidden;
+            mix-blend-mode: lighten;
+            -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+            mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+        }
+
+        .system-diagram img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        /* Architecture Grid */
+        .architecture {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .component-card {
+            background: var(--card-bg);
+            border: 0.5px solid rgba(48, 54, 61, 0.3);
+            border-radius: 6px;
+            padding: 1.5rem;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .component-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--accent-cortex);
+        }
+
+        .component-card h3 {
+            font-family: var(--font-mono);
+            margin-bottom: 0.5rem;
+            color: var(--text-header);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .badge {
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid currentColor;
+        }
+
+        .badge.cortex {
+            color: var(--accent-cortex);
+        }
+
+        .badge.stem {
+            color: var(--accent-stem);
+        }
+
+        .badge.crab {
+            color: var(--accent-rust);
+        }
+
+        /* Background Section Styles */
+        .background-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-top: 1rem;
+        }
+
+        @media (max-width: 768px) {
+            .background-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .bg-card h3 {
+            color: var(--accent-rust);
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .bg-card p {
+            color: #8b949e;
+            font-size: 0.95rem;
+        }
+
+        /* OS Notes List */
+        .os-list {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            margin-top: 1rem;
+        }
+
+        .os-block {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 6px;
+            padding: 1.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .os-block h3 {
+            font-size: 1.25rem;
+            color: var(--text-header);
+            margin-bottom: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 0.5rem;
+        }
+
+        .hw-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .hw-card h4 {
+            color: var(--accent-rust);
+            margin-bottom: 0.5rem;
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .os-block ul {
+            list-style: none;
+            font-size: 0.85rem;
+            color: #8b949e;
+        }
+
+        .os-block li {
+            margin-bottom: 0.4rem;
+        }
+
+        .os-block code {
+            color: var(--accent-rust);
+            background: rgba(222, 165, 132, 0.1);
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-size: 0.8rem;
+        }
+
+        .os-block a {
+            color: var(--accent-cortex);
+            text-decoration: none;
+        }
+
+        .os-block a:hover {
+            text-decoration: underline;
+        }
+
+        .prereq {
+            background: rgba(88, 166, 255, 0.1);
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+            border-left: 3px solid var(--accent-cortex);
+            font-size: 0.85rem;
+        }
+
+        .prereq span {
+            color: var(--accent-cortex);
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            margin-right: 0.5rem;
+        }
+
+        /* Code Block */
+        .install {
+            margin-top: 5rem;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 2rem;
+        }
+
+        .install h2 {
+            color: var(--text-header);
+            margin-top: 0;
+            margin-bottom: 1rem;
+        }
+
+        pre {
+            background: #161b22;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            color: #e2e8f0;
+        }
+
+        .btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--text-main);
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-top: 1rem;
+            border: 1px solid #30363d;
+            transition: all 0.2s ease;
+        }
+
+        .btn:hover {
+            border-color: var(--text-header);
+            color: var(--text-header);
+            transform: scale(1.05);
+        }
+
+        footer {
+            margin-top: 4rem;
+            padding: 2rem 0;
+            text-align: center;
+            color: #8b949e;
+            font-size: 0.9rem;
+            border-top: 1px solid #30363d;
+        }
+
+        .separator {
+            border: 0;
+            border-top: 1px solid #30363d;
+            margin: 4rem 0;
+        }
+
+        .technical-details {
+            padding-bottom: 4rem;
+        }
+
+        .technical-details h2 {
+            color: var(--text-header);
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        .tech-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+        }
+
+        .tech-column h3 {
+            font-family: var(--font-mono);
+            color: var(--accent-cortex);
+            margin-bottom: 1rem;
+            font-size: 1.1rem;
+        }
+
+        .tech-column ul {
+            list-style: none;
+        }
+
+        .tech-column li {
+            margin-bottom: 0.75rem;
+        }
+
+        .tech-column a {
+            color: #58a6ff;
+            text-decoration: none;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+        }
+
+        .tech-column a:hover {
+            text-decoration: underline;
+        }
+
+        .dim {
+            color: #8b949e;
+            font-size: 0.85rem;
+            margin-left: 0.5rem;
+        }
+
+        main section h2 {
+            margin-top: 0;
+            margin-bottom: 2rem;
+            color: var(--text-header);
+        }
+
+        /* Top-level sections without the .install box */
+        #architecture {
+            margin-top: 5rem;
+        }
+
+        /* First section should not have extra top margin if hero is present */
+        .hero+section.install,
+        .hero+#architecture {
+            margin-top: 2rem;
+        }
+
+        .inner-box {
+            background: #161b22;
+            padding: 1.5rem;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div class="container header-inner">
+            <div class="logo">rusty-<span>genius</span></div>
+            <nav>
+                <a href="#about">About</a>
+                <a href="#architecture">Architecture</a>
+                <a href="#install">Install</a>
+                <a href="#usage">Usage</a>
+                <a href="https://github.com/tmzt/rusty-genius" target="_blank">GitHub</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container main-content">
+        <main>
+            <section class="hero">
+                <h1>The Nervous System for AI</h1>
+                <p>A high-performance, modular, local-first AI orchestration library written in Rust.</p>
+
+                <a href="https://github.com/tmzt/rusty-genius" class="btn">View on GitHub</a>
+
+                <div class="system-diagram">
+                    <img src="./assets/images/system-diagram-black.png"
+                        alt="Rusty Genius Architecture: A brain with cortex, brainstem, and facecrab attachment">
+                </div>
+            </section>
+
+            <section id="about" class="install">
+                <h2>Local-First Intelligence</h2>
+                <div class="background-grid">
+                    <div class="bg-card">
+                        <h3>Why Local?</h3>
+                        <p>In the age of Cloud AI, local execution offers <strong>absolute privacy</strong>,
+                            <strong>zero
+                                latency</strong>, and <strong>offline reliability</strong>. Your data never leaves your
+                            machine, and your intelligence isn't gated by a subscription or an internet connection.
+                        </p>
+                    </div>
+                    <div class="bg-card">
+                        <h3>The Difference</h3>
+                        <p>Unlike API-based services (OpenAI, Anthropic) which process data on remote servers,
+                            Rusty-Genius is built for <strong>on-device orchestration</strong>. While other options
+                            exist
+                            for remote AI usage, this library focuses exclusively on the unique challenges and
+                            performance requirements of local inference.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="architecture">
+                <h2>Main Components</h2>
+                <div class="architecture">
+
+                    <div class="component-card">
+                        <h3><span class="badge cortex">Crate</span> Cortex</h3>
+                        <p><strong>The Muscle (Inference Engine).</strong> Handles KV caching, token streaming, and
+                            logic processing. Wraps <code>llama.cpp</code> for local execution or uses stubs for
+                            testing.</p>
+                    </div>
+
+                    <div class="component-card">
+                        <h3><span class="badge stem">Crate</span> Brainstem</h3>
+                        <p><strong>The Orchestrator.</strong> The central event loop that manages state, delegates asset
+                            retrieval, and controls the lifecycle (TTL) of the inference engine.</p>
+                    </div>
+
+                    <div class="component-card">
+                        <h3><span class="badge crab">Crate</span> Facecrab</h3>
+                        <p><strong>The Supplier.</strong> An autonomous asset authority. Resolves HuggingFace paths,
+                            manages the local registry, and downloads models via <code>surf</code>/<code>smol</code>.
+                        </p>
+                    </div>
+
+                </div>
+            </section>
+
+            <section id="install" class="install">
+                <h2>Installation</h2>
+                <p style="margin-bottom: 1rem; color: #8b949e;">Add Rusty-Genius to your project's
+                    <code>Cargo.toml</code>:
+                </p>
+                <pre><code class="language-toml">[dependencies]
+rusty-genius = { git = "https://github.com/tmzt/rusty-genius", features = ["metal"] }</code></pre>
+            </section>
+
+            <section id="usage" class="install">
+                <h2>Usage</h2>
+                <p style="margin-bottom: 1rem; color: #8b949e;">Initialize the orchestrator, download a model, and start
+                    chatting:</p>
+                <pre><code class="language-rust">use rusty_genius::Orchestrator;
+use rusty_genius::core::protocol::{BrainstemInput, BrainstemOutput, InferenceEvent};
+use futures::{StreamExt, sink::SinkExt, channel::mpsc};
+
+#[async_std::main]
+async fn main() -> Result<(), Box&lt;dyn std::error::Error&gt;> {
+    // 1. Core orchestration setup
+    let mut genius = Orchestrator::new().await?;
+    let (mut input, rx) = mpsc::channel(100);
+    let (tx, mut output) = mpsc::channel(100);
+
+    async_std::task::spawn(async move { genius.run(rx, tx).await });
+
+    // 2. Select model (downloads and verifies automatically)
+    input.send(BrainstemInput::LoadModel(
+        "qwen-2.5-3b-instruct".into()
+    )).await?;
+
+    // 3. Submit prompt
+    input.send(BrainstemInput::Infer {
+        prompt: "Why Rust?".into(),
+        config: Default::default(),
+    }).await?;
+
+    // 4. Stream results
+    while let Some(BrainstemOutput::Event(e)) = output.next().await {
+        if let InferenceEvent::Content(c) = e { print!("{}", c); }
+        if let InferenceEvent::Complete = e { break; }
+    }
+
+    Ok(())
+}</code></pre>
+            </section>
+
+            <section id="technical-details" class="install">
+                <h2>Inside the Cranium</h2>
+                <div class="inner-box">
+                    <div class="tech-grid">
+                        <div class="tech-column">
+                            <h3>Internal Crates</h3>
+                            <ul>
+                                <li>
+                                    <a href="https://crates.io/crates/rusty-genius-brain-cortex"
+                                        target="_blank">rusty-genius-brain-cortex</a>
+                                    <span class="dim">- Inference engine</span>
+                                </li>
+                                <li>
+                                    <a href="https://crates.io/crates/rusty-genius-brain-stem"
+                                        target="_blank">rusty-genius-brain-stem</a>
+                                    <span class="dim">- Orchestration</span>
+                                </li>
+                                <li>
+                                    <a href="https://crates.io/crates/facecrab" target="_blank">facecrab</a>
+                                    <span class="dim">- Model asset management</span>
+                                </li>
+                            </ul>
+                        </div>
+                        <div class="tech-column">
+                            <h3>Key Dependencies</h3>
+                            <ul>
+                                <li><a href="https://crates.io/crates/llama-cpp-2" target="_blank">llama-cpp-2</a> <span
+                                        class="dim">- llama.cpp bindings</span></li>
+                                <li><a href="https://crates.io/crates/async-std" target="_blank">async-std</a> <span
+                                        class="dim">- async runtime</span></li>
+                                <li><a href="https://crates.io/crates/surf" target="_blank">surf</a> <span class="dim">-
+                                        http client (async)</span></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="os-notes" class="install">
+                <h2>OS Requirements</h2>
+                <p style="margin-bottom: 1.5rem; color: #8b949e;">Rusty-Genius leverages hardware acceleration via
+                    <code>llama-cpp-2</code>. Requirements vary by platform and GPU availability.
+                </p>
+
+                <div class="os-list">
+                    <!-- macOS -->
+                    <div class="os-block">
+                        <h3>macOS</h3>
+                        <div class="prereq"><span>Prerequisites:</span> <code>xcode-select --install</code> and
+                            <code>brew install cmake</code>
+                        </div>
+                        <div class="hw-grid">
+                            <div class="hw-card">
+                                <h4>Apple Silicon (M1/M2/M3)</h4>
+                                <ul>
+                                    <li>• Native <strong>Metal</strong> acceleration (Default)</li>
+                                    <li>• Optimized via ARM NEON and Accelerate</li>
+                                    <li>• Feature: <code>features = ["metal"]</code></li>
+                                </ul>
+                            </div>
+                            <div class="hw-card">
+                                <h4>Intel Mac</h4>
+                                <ul>
+                                    <li>• CPU-only or Accelerate framework</li>
+                                    <li>• Uses AMX/AVX2 instructions where available</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Linux -->
+                    <div class="os-block">
+                        <h3>Linux</h3>
+                        <div class="prereq"><span>Prerequisites:</span>
+                            <code>apt install build-essential cmake libclang-dev</code>
+                        </div>
+                        <div class="hw-grid">
+                            <div class="hw-card">
+                                <h4>NVIDIA (CUDA)</h4>
+                                <ul>
+                                    <li>• Requires <strong>CUDA Toolkit</strong> 11.x/12.x</li>
+                                    <li>• Feature: <code>features = ["cuda"]</code></li>
+                                </ul>
+                            </div>
+                            <div class="hw-card">
+                                <h4>AMD (ROCm)</h4>
+                                <ul>
+                                    <li>• Requires <strong>ROCm</strong> stack / hipBLAS</li>
+                                    <li>• Feature: <code>features = ["hipblas"]</code></li>
+                                </ul>
+                            </div>
+                            <div class="hw-card">
+                                <h4>Intel / Generic GPU</h4>
+                                <ul>
+                                    <li>• Requires <strong>Vulkan SDK</strong></li>
+                                    <li>• Feature: <code>features = ["vulkan"]</code></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Windows -->
+                    <div class="os-block">
+                        <h3>Windows</h3>
+                        <div class="prereq"><span>Prerequisites:</span> <strong>VS 2022 Community</strong> (C++
+                            Workload) + <strong>CMake</strong></div>
+                        <div class="hw-grid">
+                            <div class="hw-card">
+                                <h4>Native (MSVC)</h4>
+                                <ul>
+                                    <li>• Supports <code>cuda</code> and <code>vulkan</code> backends</li>
+                                    <li>• Ensure <code>LIBCLANG_PATH</code> is in environment</li>
+                                </ul>
+                            </div>
+                            <div class="hw-card">
+                                <h4>WSL2 (Recommended)</h4>
+                                <ul>
+                                    <li>• Best performance and compatibility</li>
+                                    <li>• <a href="https://github.com/microsoft/WSL/discussions/10334"
+                                            target="_blank">WSL2 GPU Passthrough Guide</a></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <hr class="separator" style="margin-top: 4rem;">
+
+        <footer>
+            <p>&copy; 2026 Timothy Meade (@tmztmobile). Released under the MIT License. Images generated with Nano
+                Banana Pro.</p>
+        </footer>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>hljs.highlightAll();</script>
+</body>
+
+</html>
