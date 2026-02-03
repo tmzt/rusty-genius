@@ -1,3 +1,21 @@
+//! # Ogenius: The Voice
+//!
+//! The `ogenius` CLI provides an interactive chat REPL and an OpenAI-compatible API server,
+//! with automatic model downloading from Huggingface.
+//!
+//! ## Basic Usage
+//!
+//! ```bash
+//! # Download a model
+//! ogenius download Qwen/Qwen2.5-1.5B-Instruct
+//!
+//! # Start interactive chat
+//! ogenius chat --model Qwen/Qwen2.5-1.5B-Instruct
+//!
+//! # Run the API & Web Server (defaults to port 8080)
+//! ogenius serve --model Qwen/Qwen2.5-1.5B-Instruct
+//! ```
+
 use clap::{Parser, Subcommand};
 use colored::*;
 use futures::channel::mpsc;
