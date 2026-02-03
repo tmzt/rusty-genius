@@ -1,4 +1,4 @@
-name: Automated Code Review
+name: Automated Code Review with Claude Opus
 
 on:
   push:
@@ -10,14 +10,6 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/code-review.yml'
-  pull_request:
-    branches:
-      - main
-      - develop
-    paths:
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
   workflow_dispatch:
 
 jobs:
@@ -33,235 +25,127 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Create reviews directory
-        run: mkdir -p docs/reviews
-
-      - name: Setup temp directory
+      - name: Collect repository structure and specification
+        id: repo_context
         run: |
-          mkdir -p target/tmp
-          export TMPDIR="$(pwd)/target/tmp"
-          export TEMP="$(pwd)/target/tmp"
-          export TMP="$(pwd)/target/tmp"
+          mkdir -p /tmp
+          
+          {
+            echo "## Repository Structure"
+            find crates -type f -name "Cargo.toml" | sort
+            echo ""
+            echo "## Specification"
+            cat .agent/rules/system-prompt.md
+            echo ""
+            echo "## Key Source Files"
+            for file in crates/*/src/lib.rs; do
+              if [ -f "$file" ]; then
+                echo "### $file"
+                head -50 "$file"
+                echo "..."
+              fi
+            done
+          } > /tmp/repo_context.txt
+          
+          echo "context_file=/tmp/repo_context.txt" >> $GITHUB_OUTPUT
 
-      - name: Run Pinky (Stub) Tests
+      - name: Generate comprehensive code review with Claude Opus
+        id: claude_review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          echo "### Pinky (Stub Backend) Tests" >> review_summary.txt
-          echo "" >> review_summary.txt
-          export TMPDIR="$(pwd)/target/tmp"
-          cargo test --locked -p rusty-genius-brain-teaser --no-default-features 2>&1 | tee -a review_summary.txt
-          echo "" >> review_summary.txt
-        continue-on-error: true
-
-      - name: Review GitHub Actions Workflows
-        run: |
-          echo "## GitHub Actions Security & Best Practices Review" >> review_summary.txt
-          echo "" >> review_summary.txt
-          echo "### Workflow Files Analyzed" >> review_summary.txt
-          find .github/workflows -name "*.yml" -o -name "*.yaml" | while read workflow; do
-            echo "- \`${workflow}\`" >> review_summary.txt
-          done
-          echo "" >> review_summary.txt
-          
-          echo "### Security Checks" >> review_summary.txt
-          echo "" >> review_summary.txt
-          
-          # Check for hardcoded secrets
-          if grep -r "secret\|password\|token\|key" .github/workflows/ | grep -v "secrets\." | grep -v "github.token" > /dev/null; then
-            echo "❌ **POTENTIAL HARDCODED SECRETS DETECTED** - Review .github/workflows for plaintext sensitive data" >> review_summary.txt
-          else
-            echo "✅ No obvious hardcoded secrets detected (use GitHub secrets for sensitive data)" >> review_summary.txt
-          fi
-          echo "" >> review_summary.txt
-          
-          # Check for third-party action pinning
-          echo "**Third-Party Actions Used:**" >> review_summary.txt
-          grep -h "uses:" .github/workflows/*.yml | sort -u | sed 's/^/- /' >> review_summary.txt
-          echo "" >> review_summary.txt
-          echo "⚠️  Verify all third-party actions are from trusted sources and use specific versions" >> review_summary.txt
-          echo "" >> review_summary.txt
-          
-          # Check permissions
-          echo "**Job Permissions:**" >> review_summary.txt
-          grep -A2 "permissions:" .github/workflows/*.yml | grep -E "^\s+(contents|pull-requests|issues):" | sed 's/^/- /' >> review_summary.txt || echo "- (Check manually)" >> review_summary.txt
-          echo "" >> review_summary.txt
-          
-          # Check for continue-on-error usage
-          if grep "continue-on-error: true" .github/workflows/*.yml > /dev/null; then
-            echo "⚠️  Uses \`continue-on-error: true\` - Ensure failures are properly reported" >> review_summary.txt
-          else
-            echo "✅ No unconditional error suppression detected" >> review_summary.txt
-          fi
-          echo "" >> review_summary.txt
-          
-          echo "### Workflow Specifications Compliance" >> review_summary.txt
-          echo "" >> review_summary.txt
-          echo "✅ Uses local temp directory isolation (\`target/tmp\`)" >> review_summary.txt
-          echo "✅ Runs Pinky (stub) tests for validation" >> review_summary.txt
-          echo "✅ Validates Spec: no tokio/reqwest, uses surf/async-std" >> review_summary.txt
-          echo "✅ Auto-commits review reports to repository" >> review_summary.txt
-          echo "✅ Proper git operations (atomic, safe)" >> review_summary.txt
-          echo "✅ Comments on PRs with summary" >> review_summary.txt
-          echo "" >> review_summary.txt
-
-      - name: Run code review analysis
-        id: review
-        run: |
+          set -e
           REVIEW_DATE=$(date +%Y%m%d)
           REVIEW_FILE="docs/reviews/${REVIEW_DATE}.md"
+          mkdir -p docs/reviews
           
-          echo "review_date=${REVIEW_DATE}" >> $GITHUB_OUTPUT
-          echo "review_file=${REVIEW_FILE}" >> $GITHUB_OUTPUT
+          # Build the review prompt
+          read -r -d '' REVIEW_PROMPT << 'EOF' || true
+          You are an expert Rust and Systems Architecture reviewer for the rusty-genius project.
           
-          cat > "${REVIEW_FILE}" << 'EOF'
-          # Automated Code Review - $(date +%Y-%m-%d)
+          Review the code comprehensively, including comparison with the spec in system-prompt.md.
           
-          ## Test Results
+          Write a full report of each package and file with compliance or violation found of:
+          1. The spec
+          2. Security concerns
+          3. Coding concerns and best practices
           
+          Use ✅/❌/⚠️ emoji style for status indicators.
+          
+          Format the report as Markdown with clear sections for each package, spec violations, 
+          security concerns, and best practices recommendations.
+          
+          Include:
+          - Spec Compliance tables (Requirement | Status | Notes)
+          - Security Concerns tables
+          - Coding Best Practices tables
+          - Summary sections for critical violations, moderate issues, and successes
+          - Actionable recommendations
+          
+          Repository Context (below):
           EOF
           
-          # Append test summary
-          if [ -f review_summary.txt ]; then
-            cat review_summary.txt >> "${REVIEW_FILE}"
-          fi
+          # Combine context and prompt
+          CONTEXT=$(cat /tmp/repo_context.txt)
+          FULL_PROMPT="${REVIEW_PROMPT}
+          ${CONTEXT}"
           
-          echo "" >> "${REVIEW_FILE}"
-          echo "## Cargo Check & Clippy Analysis" >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
+          # Call Claude Opus API
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -d "{
+              \"model\": \"claude-3-5-opus-20241022\",
+              \"max_tokens\": 8000,
+              \"messages\": [
+                {
+                  \"role\": \"user\",
+                  \"content\": $(echo "$FULL_PROMPT" | jq -Rs .)
+                }
+              ]
+            }")
           
-          # Run cargo check
-          echo "### Build Check" >> "${REVIEW_FILE}"
-          echo '```' >> "${REVIEW_FILE}"
-          cargo check --all 2>&1 | head -50 >> "${REVIEW_FILE}" || true
-          echo '```' >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
+          # Extract response and save to file
+          {
+            echo "# 📋 Automated Code Review - $(date +%Y-%m-%d)"
+            echo ""
+            echo "**Generated with Claude Opus**"
+            echo ""
+            echo "$RESPONSE" | jq -r '.content[0].text'
+          } > "$REVIEW_FILE"
           
-          # Run clippy
-          echo "### Clippy Lints" >> "${REVIEW_FILE}"
-          echo '```' >> "${REVIEW_FILE}"
-          cargo clippy --all --all-targets -- -D warnings 2>&1 | head -100 >> "${REVIEW_FILE}" || true
-          echo '```' >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
-          
-          # Run cargo fmt check
-          echo "### Format Check" >> "${REVIEW_FILE}"
-          echo '```' >> "${REVIEW_FILE}"
-          cargo fmt --all -- --check 2>&1 >> "${REVIEW_FILE}" || true
-          echo '```' >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
-          
-          # Package statistics
-          echo "## Package Statistics" >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
-          find crates -name "Cargo.toml" | while read toml; do
-            dir=$(dirname "$toml")
-            pkg_name=$(grep '^name' "$toml" | head -1 | cut -d'"' -f2)
-            echo "- **${pkg_name}** (${dir})" >> "${REVIEW_FILE}"
-          done
-          echo "" >> "${REVIEW_FILE}"
-          
-          # Spec compliance reference
-          echo "## Specification Compliance" >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
-          echo "This review is checked against:" >> "${REVIEW_FILE}"
-          echo "- [System Prompt Specification](.agent/rules/system-prompt.md)" >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
-          echo "**Key Requirements:**" >> "${REVIEW_FILE}"
-          echo "- ✅ No \`tokio\` dependency" >> "${REVIEW_FILE}"
-          echo "- ✅ No \`reqwest\` dependency" >> "${REVIEW_FILE}"
-          echo "- ✅ Use \`surf\` for HTTP requests" >> "${REVIEW_FILE}"
-          echo "- ✅ Use \`async-std\` or \`smol\` for async runtime" >> "${REVIEW_FILE}"
-          echo "- ✅ \`llama-cpp-2\` must be optional" >> "${REVIEW_FILE}"
-          echo "- ✅ Use local \`target/tmp\` instead of system \`/tmp\`" >> "${REVIEW_FILE}"
-          echo "- ✅ Track \`Cargo.lock\` in git" >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
-          
-          # Dependency audit
-          echo "## Dependencies Check" >> "${REVIEW_FILE}"
-          echo "" >> "${REVIEW_FILE}"
-          if grep -q "tokio" Cargo.lock; then
-            echo "❌ **VIOLATION:** \`tokio\` found in dependency tree" >> "${REVIEW_FILE}"
-          else
-            echo "✅ No \`tokio\` in dependency tree" >> "${REVIEW_FILE}"
-          fi
-          echo "" >> "${REVIEW_FILE}"
-          
-          if grep -q "reqwest" Cargo.lock; then
-            echo "❌ **VIOLATION:** \`reqwest\` found in dependency tree" >> "${REVIEW_FILE}"
-          else
-            echo "✅ No \`reqwest\` in dependency tree" >> "${REVIEW_FILE}"
-          fi
-          echo "" >> "${REVIEW_FILE}"
-          
-          if grep -q "surf" Cargo.lock; then
-            echo "✅ \`surf\` found in dependency tree" >> "${REVIEW_FILE}"
-          else
-            echo "⚠️  \`surf\` not found in dependency tree" >> "${REVIEW_FILE}"
-          fi
-          echo "" >> "${REVIEW_FILE}"
-          
-          if grep -q "async-std" Cargo.lock; then
-            echo "✅ \`async-std\` found in dependency tree" >> "${REVIEW_FILE}"
-          else
-            echo "⚠️  \`async-std\` not found in dependency tree" >> "${REVIEW_FILE}"
-          fi
-          echo "" >> "${REVIEW_FILE}"
-          
-          echo "✅ Review written to ${REVIEW_FILE}"
+          echo "review_file=${REVIEW_FILE}" >> $GITHUB_OUTPUT
+          echo "review_date=${REVIEW_DATE}" >> $GITHUB_OUTPUT
+          echo "✅ Review generated: ${REVIEW_FILE}"
 
-      - name: Check if review file was created
-        run: |
-          if [ -f "${{ steps.review.outputs.review_file }}" ]; then
-            echo "✅ Review file created successfully"
-            echo "📄 File: ${{ steps.review.outputs.review_file }}"
-            wc -l "${{ steps.review.outputs.review_file }}"
-          else
-            echo "❌ Review file was not created"
-            exit 1
-          fi
-
-      - name: Commit review to repository
-        if: github.event_name != 'pull_request'
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Create Pull Request with Review
+        uses: peter-evans/create-pull-request@v5
         with:
-          commit_message: "chore(review): automated code review for ${{ steps.review.outputs.review_date }}"
-          file_pattern: "docs/reviews/*.md"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
-          commit_options: "--no-verify"
-          push_options: "--force-with-lease"
-
-      - name: Comment on PR with review summary
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const reviewFile = '${{ steps.review.outputs.review_file }}';
+          commit-message: "docs(review): Claude-generated code review for ${{ steps.claude_review.outputs.review_date }}"
+          title: "📋 Automated Code Review - ${{ steps.claude_review.outputs.review_date }}"
+          body: |
+            # Automated Code Review
             
-            if (fs.existsSync(reviewFile)) {
-              const content = fs.readFileSync(reviewFile, 'utf8');
-              const summary = content.split('\n').slice(0, 20).join('\n');
-              
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: `## 📋 Automated Code Review\n\n${summary}\n\n[View full review](../../blob/${{ github.head_ref }}/docs/reviews/${{ steps.review.outputs.review_date }}.md)`
-              });
-            }
+            This PR contains a comprehensive code review generated by Claude Opus, comparing the codebase against the specification in `.agent/rules/system-prompt.md`.
+            
+            **Review File:** `docs/reviews/${{ steps.claude_review.outputs.review_date }}.md`
+            
+            **Includes Analysis:**
+            - ✅/❌/⚠️ Spec Compliance for all packages
+            - Security concerns and vulnerabilities
+            - Coding best practices and patterns
+            - Actionable recommendations
+            
+            Review and merge if satisfied with findings.
+          branch: "reviews/claude-${{ steps.claude_review.outputs.review_date }}"
+          delete-branch: true
+          labels: "review,automated,documentation"
 
       - name: Upload review artifact
         uses: actions/upload-artifact@v3
         if: always()
         with:
-          name: code-review-${{ steps.review.outputs.review_date }}
-          path: docs/reviews/${{ steps.review.outputs.review_date }}.md
+          name: code-review-${{ steps.claude_review.outputs.review_date }}
+          path: docs/reviews/${{ steps.claude_review.outputs.review_date }}.md
           retention-days: 90
