@@ -47,7 +47,7 @@
 //! #[async_std::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let authority = AssetAuthority::new()?;
-//!     let mut events = authority.ensure_model_stream("qwen-2.5-1.5b-instruct");
+//!     let mut events = authority.ensure_model_stream("tiny-model");
 //!
 //!     while let Some(event) = events.next().await {
 //!         match event {
@@ -56,7 +56,7 @@
 //!                 let pct = (current as f64 / total as f64) * 100.0;
 //!                 print!("\rProgress: {:.2}% ({}/{})", pct, current, total);
 //!             }
-//!             AssetEvent::Complete(_) => println!("\nDownload finished!"),
+//!             AssetEvent::Complete(path) => println!("\nModel ready at: {}", path),
 //!             AssetEvent::Error(err) => eprintln!("Error: {}", err),
 //!         }
 //!     }

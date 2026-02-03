@@ -23,7 +23,7 @@
 //!
 //! ```no_run
 //! use rusty_genius::Orchestrator;
-//! use rusty_genius::core::protocol::{BrainstemInput, BrainstemOutput, InferenceEvent};
+//! use rusty_genius::core::protocol::{AssetEvent, BrainstemInput, BrainstemOutput, InferenceEvent};
 //! use futures::{StreamExt, sink::SinkExt, channel::mpsc};
 //!
 //! #[async_std::main]
@@ -34,27 +34,42 @@
 //!     let (tx, mut output) = mpsc::channel(100);
 //!
 //!     // Spawn the Brainstem event loop in a background task
-//!     async_std::task::spawn(async move { genius.run(rx, tx).await });
+//!     async_std::task::spawn(async move {
+//!         if let Err(e) = genius.run(rx, tx).await {
+//!             eprintln!("Orchestrator error: {}", e);
+//!         }
+//!     });
 //!
 //!     // 2. Load a model (downloads from HuggingFace if not cached)
 //!     // The AssetAuthority (Facecrab) handles resolution and downloading automatically.
 //!     input.send(BrainstemInput::LoadModel(
-//!         "qwen-2.5-3b-instruct".into()
+//!         "tiny-model".into()
 //!     )).await?;
 //!
 //!     // 3. Submit a prompt
 //!     input.send(BrainstemInput::Infer {
-//!         prompt: "Explain Rust in one sentence.".into(),
+//!         prompt: "Once upon a time...".into(),
 //!         config: Default::default(),
 //!     }).await?;
 //!
 //!     // 4. Stream results
 //!     // The Cortex engine streams tokens back through the channel
-//!     while let Some(BrainstemOutput::Event(e)) = output.next().await {
-//!         match e {
-//!             InferenceEvent::Content(c) => print!("{}", c),
-//!             InferenceEvent::Complete => break,
-//!             _ => {}
+//!     while let Some(msg) = output.next().await {
+//!         match msg {
+//!             BrainstemOutput::Asset(a) => match a {
+//!                 AssetEvent::Complete(path) => println!("Model ready at: {}", path),
+//!                 AssetEvent::Error(e) => eprintln!("Download error: {}", e),
+//!                 _ => {}
+//!             },
+//!             BrainstemOutput::Event(e) => match e {
+//!                 InferenceEvent::Content(c) => print!("{}", c),
+//!                 InferenceEvent::Complete => break,
+//!                 _ => {}
+//!             },
+//!             BrainstemOutput::Error(err) => {
+//!                 eprintln!("Error: {}", err);
+//!                 break;
+//!             }
 //!         }
 //!     }
 //!

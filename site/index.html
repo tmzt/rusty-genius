@@ -427,6 +427,7 @@
             <nav>
                 <a href="#about">About</a>
                 <a href="#architecture">Architecture</a>
+                <a href="#configuration">Configuration</a>
                 <a href="#install">Install</a>
                 <a href="#usage">Usage</a>
                 <a href="https://github.com/tmzt/rusty-genius" target="_blank">GitHub</a>
@@ -473,6 +474,40 @@
                 </div>
             </section>
 
+            <section id="configuration" class="install">
+                <h2>Configuration</h2>
+                <p style="margin-bottom: 1rem; color: #8b949e;">Control behavior via environment variables or a local
+                    registry:</p>
+
+                <div style="overflow-x: auto; margin-bottom: 2rem;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                        <tr style="border-bottom: 1px solid #30363d; text-align: left; color: var(--accent-stem);">
+                            <th style="padding: 0.5rem;">Variable</th>
+                            <th style="padding: 0.5rem;">Description</th>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #30363d;">
+                            <td style="padding: 0.5rem; font-family: var(--font-mono);">GENIUS_HOME</td>
+                            <td style="padding: 0.5rem; color: #8b949e;">Base config dir (~/.config/rusty-genius)</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #30363d;">
+                            <td style="padding: 0.5rem; font-family: var(--font-mono);">GENIUS_CACHE</td>
+                            <td style="padding: 0.5rem; color: #8b949e;">Model storage path ($HOME/cache)</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <h4 style="color: var(--accent-facecrab); margin-bottom: 0.5rem;">Injected Manifest API</h4>
+                <p style="font-size: 0.9rem; color: #8b949e; margin-bottom: 1rem;">Extend the registry by creating
+                    <code>registry.toml</code> in your home directory. This allows you to "inject" any HuggingFace model
+                    directly into the orchestrator.
+                </p>
+                <pre><code class="language-toml">[[models]]
+name = "my-local-model"
+repo = "Org/Repo-GGUF"
+filename = "model.Q4_K_M.gguf"
+quantization = "Q4_K_M"</code></pre>
+            </section>
+
             <section id="architecture">
                 <h2>Main Components</h2>
                 <div class="architecture">
@@ -509,12 +544,40 @@
 rusty-genius = { version = "0.1.1", features = ["metal"] }</code></pre>
             </section>
 
+            <section id="try-it-out" class="install">
+                <h2>Try It Out</h2>
+                <p style="margin-bottom: 1rem; color: #8b949e;">Run these commands in the terminal to test the crates
+                    locally:</p>
+
+                <h4 style="color: var(--accent-facecrab); margin-bottom: 0.5rem;">1. Test Asset Downloader</h4>
+                <pre><code class="language-bash">cargo run -p facecrab --example downloader</code></pre>
+
+                <h4 style="color: var(--accent-stem); margin: 1.5rem 0 0.5rem;">2. Test Local Inference</h4>
+                <p style="font-size: 0.85rem; color: #8b949e; margin-bottom: 0.5rem;">Run the chat example with your
+                    preferred hardware acceleration:</p>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                    <div>
+                        <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--accent-rust);">macOS
+                            (Metal)</span>
+                        <pre
+                            style="padding: 0.5rem;"><code class="language-bash">cargo run -p rusty-genius --example basic_chat --features metal</code></pre>
+                    </div>
+                    <div>
+                        <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--accent-cortex);">NVIDIA
+                            (CUDA)</span>
+                        <pre
+                            style="padding: 0.5rem;"><code class="language-bash">cargo run -p rusty-genius --example basic_chat --features cuda</code></pre>
+                    </div>
+                </div>
+            </section>
+
             <section id="usage" class="install">
                 <h2>Usage</h2>
                 <p style="margin-bottom: 1rem; color: #8b949e;">Initialize the orchestrator, download a model, and start
                     chatting:</p>
                 <pre><code class="language-rust">use rusty_genius::Orchestrator;
-use rusty_genius::core::protocol::{BrainstemInput, BrainstemOutput, InferenceEvent};
+use rusty_genius::core::protocol::{AssetEvent, BrainstemInput, BrainstemOutput, InferenceEvent};
 use futures::{StreamExt, sink::SinkExt, channel::mpsc};
 
 #[async_std::main]
@@ -524,23 +587,41 @@ async fn main() -> Result<(), Box&lt;dyn std::error::Error&gt;> {
     let (mut input, rx) = mpsc::channel(100);
     let (tx, mut output) = mpsc::channel(100);
 
-    async_std::task::spawn(async move { genius.run(rx, tx).await });
+    async_std::task::spawn(async move { 
+        if let Err(e) = genius.run(rx, tx).await {
+            eprintln!("Orchestrator error: {}", e);
+        }
+    });
 
     // 2. Select model (downloads and verifies automatically)
     input.send(BrainstemInput::LoadModel(
-        "qwen-2.5-3b-instruct".into()
+        "tiny-model".into()
     )).await?;
 
     // 3. Submit prompt
     input.send(BrainstemInput::Infer {
-        prompt: "Why Rust?".into(),
+        prompt: "Once upon a time...".into(),
         config: Default::default(),
     }).await?;
 
     // 4. Stream results
-    while let Some(BrainstemOutput::Event(e)) = output.next().await {
-        if let InferenceEvent::Content(c) = e { print!("{}", c); }
-        if let InferenceEvent::Complete = e { break; }
+    while let Some(msg) = output.next().await {
+        match msg {
+            BrainstemOutput::Asset(a) => match a {
+                AssetEvent::Complete(path) => println!("Model ready at: {}", path),
+                AssetEvent::Error(e) => eprintln!("Download error: {}", e),
+                _ => {}
+            },
+            BrainstemOutput::Event(e) => match e {
+                InferenceEvent::Content(c) => print!("{}", c),
+                InferenceEvent::Complete => break,
+                _ => {}
+            },
+            BrainstemOutput::Error(err) => {
+                eprintln!("Error: {}", err);
+                break;
+            }
+        }
     }
 
     Ok(())

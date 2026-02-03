@@ -53,8 +53,10 @@ use facecrab::AssetAuthority;
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let authority = AssetAuthority::new()?;
+    
     // Resolves registry names or direct HF IDs, downloads to local cache automatically
-    let model_path = authority.ensure_model("qwen-2.5-3b-instruct").await?;
+    // Returns the absolute file path on success
+    let model_path = authority.ensure_model("tiny-model").await?;
     println!("Model ready at: {:?}", model_path);
     Ok(())
 }
@@ -82,6 +84,67 @@ Enable the appropriate feature for your hardware:
 - **Metal**: `features = ["metal"]` (macOS Apple Silicon/Intel)
 - **CUDA**: `features = ["cuda"]` (NVIDIA GPUs)
 - **Vulkan**: `features = ["vulkan"]` (Generic/Intel GPUs)
+
+## Try It Out
+
+You can run the included examples to test the system immediately. Ensure you have the [prerequisites](#os-prerequisites) installed.
+
+### 1. Test Asset Downloader
+Verify that `facecrab` can resolve and download models from HuggingFace:
+```bash
+cargo run -p facecrab --example downloader
+```
+
+### 2. Test Local Inference
+Run a full chat loop using the `real-engine` (requires `llama.cpp` to build). 
+
+**CPU (Generic):**
+```bash
+cargo run -p rusty-genius --example basic_chat --features real-engine
+```
+
+**GPU (macOS / Metal):**
+```bash
+cargo run -p rusty-genius --example basic_chat --features metal
+```
+
+**GPU (NVIDIA / CUDA):**
+```bash
+cargo run -p rusty-genius --example basic_chat --features cuda
+```
+
+## Configuration
+
+Rusty-Genius can be configured via environment variables and local manifest files.
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GENIUS_HOME` | Primary directory for configuration and the model registry. | `~/.config/rusty-genius` |
+| `GENIUS_CACHE` | Directory where downloaded model assets (.gguf) are stored. | `$GENIUS_HOME/cache` |
+| `RUSTY_GENIUS_CONFIG_DIR` | Alternative override for the configuration directory. | - |
+
+### User Injected Manifest API
+
+The "Injected Manifest" API allows you to extend the system's model awareness without modifying the library. You can "inject" custom models by creating or updating a `registry.toml` file in your `GENIUS_HOME`.
+
+**Location:** `~/.config/rusty-genius/registry.toml`
+
+```toml
+[[models]]
+name = "my-custom-model"
+repo = "TheBloke/Llama-2-7B-Chat-GGUF"
+filename = "llama-2-7b-chat.Q4_K_M.gguf"
+quantization = "Q4_K_M"
+```
+
+Once defined in your local registry, the model can be loaded by its friendly name:
+
+```rust
+// The orchestrator will now treat "my-custom-model" as a first-class citizen
+input.send(BrainstemInput::LoadModel("my-custom-model".into())).await?;
+```
 
 ## Usage Methods
 
@@ -134,7 +197,7 @@ stateDiagram-v2
 
 ```rust
 use rusty_genius::Orchestrator;
-use rusty_genius::core::protocol::{BrainstemInput, BrainstemOutput, InferenceEvent};
+use rusty_genius::core::protocol::{AssetEvent, BrainstemInput, BrainstemOutput, InferenceEvent};
 use futures::{StreamExt, sink::SinkExt, channel::mpsc};
 
 #[async_std::main]
@@ -145,25 +208,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, mut output) = mpsc::channel(100);
 
     // Spawn the Brainstem event loop
-    async_std::task::spawn(async move { genius.run(rx, tx).await });
+    async_std::task::spawn(async move { 
+        if let Err(e) = genius.run(rx, tx).await {
+            eprintln!("Orchestrator error: {}", e);
+        }
+    });
 
     // 2. Load a model (downloads from HuggingFace if not cached)
     input.send(BrainstemInput::LoadModel(
-        "qwen-2.5-3b-instruct".into()
+        "tiny-model".into()
     )).await?;
 
     // 3. Submit a prompt
     input.send(BrainstemInput::Infer {
-        prompt: "Explain Rust in one sentence.".into(),
+        prompt: "Once upon a time, in the world of systems programming...".into(),
         config: Default::default(),
     }).await?;
 
     // 4. Stream results
-    while let Some(BrainstemOutput::Event(e)) = output.next().await {
-        match e {
-            InferenceEvent::Content(c) => print!("{}", c),
-            InferenceEvent::Complete => break,
-            _ => {}
+    println!("--- Response ---");
+    while let Some(msg) = output.next().await {
+        match msg {
+            BrainstemOutput::Asset(a) => match a {
+                AssetEvent::Started(s) => println!("[Asset] Starting: {}", s),
+                AssetEvent::Complete(path) => println!("[Asset] Ready at: {}", path),
+                AssetEvent::Error(e) => eprintln!("[Asset] Error: {}", e),
+                _ => {} // Handle progress if desired
+            },
+            BrainstemOutput::Event(e) => match e {
+                InferenceEvent::Content(c) => print!("{}", c),
+                InferenceEvent::Complete => {
+                    println!("\n--- Complete ---");
+                    break;
+                }
+                _ => {}
+            },
+            BrainstemOutput::Error(err) => {
+                eprintln!("\nBrainstem Error: {}", err);
+                break;
+            }
         }
     }
 

@@ -33,8 +33,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 print!("\rDownload Progress: {:.1}% ({}/{})", pct, current, total);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
-            AssetEvent::Complete(name) => {
-                println!("\nSuccessfully completed: {}", name);
+            AssetEvent::Complete(path) => {
+                println!("\nSuccessfully completed: {}", path);
             }
             AssetEvent::Error(err) => {
                 eprintln!("\nAsset Error: {}", err);
