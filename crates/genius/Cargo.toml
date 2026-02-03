@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Public facade and API key for rusty-genius"
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
 publish.workspace = true
 
 [dependencies]

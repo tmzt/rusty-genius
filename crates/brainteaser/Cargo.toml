@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Testing harness and verification for rusty-genius"
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
 publish.workspace = true
 
 [dependencies]

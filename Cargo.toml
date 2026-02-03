@@ -16,4 +16,6 @@ authors = ["Timothy Meade"]
 license = "MIT"
 repository = "https://github.com/tmzt/rusty-genius"
 homepage = "https://tmzt.github.io/rusty-genius/"
+keywords = ["ai", "llm", "local-first", "inference", "orchestration"]
+categories = ["science", "algorithms", "asynchronous"]
 publish = true
