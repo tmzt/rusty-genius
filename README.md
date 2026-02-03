@@ -3,6 +3,7 @@
 [![crates.io](https://img.shields.io/badge/crates.io-v0.1.1-orange)](https://crates.io/crates/rusty-genius)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Runtime: async-std](https://img.shields.io/badge/runtime-async--std-blue)](https://async.rs/)
+[![Bindings: llama-cpp-2](https://img.shields.io/badge/bindings-llama--cpp--2-purple)](https://crates.io/crates/llama-cpp-2)
 [![Website](https://img.shields.io/badge/website-live-success)](https://tmzt.github.io/rusty-genius/)
 
 **The Nervous System for AI.** A high-performance, modular, local-first AI orchestration library written in Rust.
