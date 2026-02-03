@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use futures::channel::mpsc;
 use rusty_genius_core::protocol::InferenceEvent;
-use tokio::sync::mpsc;
 
 pub mod backend;
 

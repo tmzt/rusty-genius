@@ -1,14 +1,16 @@
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use futures::channel::mpsc;
+    use futures::sink::SinkExt;
+    use futures::StreamExt;
     use rusty_genius::Orchestrator;
     use rusty_genius_core::protocol::{
         BrainstemInput, BrainstemOutput, InferenceEvent, ThoughtEvent,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
-    use tokio::sync::mpsc;
-    use tokio::time::Duration;
+    use std::time::Duration;
 
     #[derive(Debug)]
     struct Fixture {
@@ -56,7 +58,7 @@ mod tests {
         fixtures
     }
 
-    #[tokio::test]
+    #[async_std::test]
     async fn test_inference_flow() -> Result<()> {
         println!("Starting test_inference_flow...");
 
@@ -68,11 +70,11 @@ mod tests {
 
         // 2. Setup Orchestrator
         let mut orchestrator = Orchestrator::new().await?;
-        let (input_tx, input_rx) = mpsc::channel(100);
+        let (mut input_tx, input_rx) = mpsc::channel(100);
         let (output_tx, mut output_rx) = mpsc::channel(100);
 
         let orchestrator_handle =
-            tokio::spawn(async move { orchestrator.run(input_rx, output_tx).await });
+            async_std::task::spawn(async move { orchestrator.run(input_rx, output_tx).await });
 
         // 3. Load Model (Generic for now)
         // 3. Load Model
@@ -130,7 +132,8 @@ mod tests {
                 5
             };
             let msg =
-                tokio::time::timeout(Duration::from_secs(timeout_sec), output_rx.recv()).await;
+                async_std::future::timeout(Duration::from_secs(timeout_sec), output_rx.next())
+                    .await;
             match msg {
                 Ok(Some(BrainstemOutput::Event(event))) => match event {
                     InferenceEvent::ProcessStart => println!("Process Started"),

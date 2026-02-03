@@ -1,9 +1,11 @@
 use anyhow::{anyhow, Result};
 use facecrab::AssetAuthority;
+use futures::channel::mpsc;
+use futures::sink::SinkExt;
+use futures::StreamExt;
 use rusty_genius_brain_cortex::{create_engine, Engine};
 use rusty_genius_core::protocol::{BrainstemInput, BrainstemOutput};
-use tokio::sync::mpsc;
-use tokio::time::{self, Duration, Instant};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum CortexStrategy {
@@ -37,7 +39,7 @@ impl Orchestrator {
     pub async fn run(
         &mut self,
         mut input_rx: mpsc::Receiver<BrainstemInput>,
-        output_tx: mpsc::Sender<BrainstemOutput>,
+        mut output_tx: mpsc::Sender<BrainstemOutput>,
     ) -> Result<()> {
         loop {
             // Determine timeout based on strategy
@@ -65,7 +67,7 @@ impl Orchestrator {
             };
 
             let msg_option = if let Some(wait_time) = next_activity {
-                match time::timeout(wait_time, input_rx.recv()).await {
+                match async_std::future::timeout(wait_time, input_rx.next()).await {
                     Ok(msg) => msg,
                     Err(_) => {
                         // Timeout expired, loop back to check (should trigger hibernation)
@@ -74,7 +76,7 @@ impl Orchestrator {
                 }
             } else {
                 // Wait indefinitely
-                input_rx.recv().await
+                input_rx.next().await
             };
 
             match msg_option {
@@ -112,7 +114,7 @@ impl Orchestrator {
                             match self.engine.infer(&prompt).await {
                                 Ok(mut event_rx) => {
                                     // Forward events to output
-                                    while let Some(event_res) = event_rx.recv().await {
+                                    while let Some(event_res) = event_rx.next().await {
                                         match event_res {
                                             Ok(event) => {
                                                 if let Err(_) = output_tx

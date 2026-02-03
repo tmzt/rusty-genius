@@ -8,7 +8,8 @@ rusty-genius = { path = "../genius" }
 rusty-genius-core = { path = "../core" }
 rusty-genius-brain-cortex = { path = "../cortex" }
 anyhow = "1.0"
-tokio = { version = "1", features = ["full", "test-util"] }
+async-std = { version = "1.12", features = ["attributes"] }
+futures = "0.3"
 
 [features]
 real-engine = ["rusty-genius-brain-cortex/real-engine"]

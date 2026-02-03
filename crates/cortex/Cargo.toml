@@ -6,7 +6,8 @@ edition = "2021"
 [dependencies]
 rusty-genius-core = { path = "../core" }
 anyhow = "1.0"
-tokio = { version = "1", features = ["full"] }
+async-std = "1.12"
+futures = "0.3"
 async-trait = "0.1"
 llama-cpp-2 = { version = "0.1", optional = true } 
 # Note: assuming llama-cpp-2 version. In a real scenario I'd check crates.io or use a git dep if needed. 

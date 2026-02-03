@@ -1,9 +1,11 @@
 use crate::Engine;
 use anyhow::{anyhow, Result};
+use async_std::task::{self, sleep};
 use async_trait::async_trait;
+use futures::channel::mpsc;
+use futures::sink::SinkExt;
 use rusty_genius_core::protocol::{InferenceEvent, ThoughtEvent};
-use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use std::time::Duration;
 
 #[cfg(feature = "real-engine")]
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -54,12 +56,12 @@ impl Engine for Pinky {
             return Err(anyhow!("Pinky Error: No model loaded!"));
         }
 
-        let (tx, rx) = mpsc::channel(100);
+        let (mut tx, rx) = mpsc::channel(100);
         let prompt = prompt.to_string();
 
-        tokio::spawn(async move {
+        task::spawn(async move {
             let _ = tx.send(Ok(InferenceEvent::ProcessStart)).await;
-            sleep(Duration::from_millis(50)).await;
+            task::sleep(Duration::from_millis(50)).await;
 
             // Emit a "thought"
             let _ = tx
@@ -70,7 +72,7 @@ impl Engine for Pinky {
                     "Narf!".to_string(),
                 ))))
                 .await;
-            sleep(Duration::from_millis(50)).await;
+            task::sleep(Duration::from_millis(50)).await;
             let _ = tx
                 .send(Ok(InferenceEvent::Thought(ThoughtEvent::Stop)))
                 .await;
@@ -136,11 +138,11 @@ impl Engine for Brain {
         let backend = self.backend.clone();
 
         let prompt_str = prompt.to_string();
-        let (tx, rx) = mpsc::channel(100);
+        let (mut tx, rx) = mpsc::channel(100);
 
-        tokio::task::spawn_blocking(move || {
+        task::spawn_blocking(move || {
             // Send ProcessStart
-            let _ = tx.blocking_send(Ok(InferenceEvent::ProcessStart));
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::ProcessStart)));
 
             // Use the shared backend (no re-init)
             let backend_ref = &backend;
@@ -149,10 +151,12 @@ impl Engine for Brain {
             let ctx_params =
                 LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(2048).unwrap()));
 
-            let mut ctx = match model.new_context(&backend_ref, ctx_params) {
+            let mut ctx = match model.new_context(backend_ref, ctx_params) {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.blocking_send(Err(anyhow!("Context creation failed: {}", e)));
+                    let _ = futures::executor::block_on(
+                        tx.send(Err(anyhow!("Context creation failed: {}", e))),
+                    );
                     return;
                 }
             };
@@ -161,7 +165,9 @@ impl Engine for Brain {
             let tokens_list = match model.str_to_token(&prompt_str, AddBos::Always) {
                 Ok(t) => t,
                 Err(e) => {
-                    let _ = tx.blocking_send(Err(anyhow!("Tokenize failed: {}", e)));
+                    let _ = futures::executor::block_on(
+                        tx.send(Err(anyhow!("Tokenize failed: {}", e))),
+                    );
                     return;
                 }
             };
@@ -179,16 +185,20 @@ impl Engine for Brain {
 
             // Decode Prompt
             if let Err(e) = ctx.decode(&mut batch) {
-                let _ = tx.blocking_send(Err(anyhow!("Decode prompt failed: {}", e)));
+                let _ = futures::executor::block_on(
+                    tx.send(Err(anyhow!("Decode prompt failed: {}", e))),
+                );
                 return;
             }
 
-            let _ = tx.blocking_send(Ok(InferenceEvent::Thought(ThoughtEvent::Start)));
+            let _ = futures::executor::block_on(
+                tx.send(Ok(InferenceEvent::Thought(ThoughtEvent::Start))),
+            );
 
             // Emit success message demonstrating Real Engine loaded and Decoded.
-            let _ = tx.blocking_send(Ok(InferenceEvent::Content(format!("(Real Engine) Model Loaded & Decoded {} tokens. [Sampling implementation simplified]", tokens_list.len()))));
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Content(format!("(Real Engine) Model Loaded & Decoded {} tokens. [Sampling implementation simplified]", tokens_list.len())))));
 
-            let _ = tx.blocking_send(Ok(InferenceEvent::Complete));
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Complete)));
         });
 
         Ok(rx)
