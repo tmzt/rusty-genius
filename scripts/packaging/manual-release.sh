@@ -8,7 +8,7 @@ if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
     echo "Description:"
     echo "  Manually triggers the release-plz release command to publish crates and git tags."
     echo ""
-    echo "Environment Variables Required:"
+    echo "Environment Variables (Optional if logged in locally):"
     echo "  GITHUB_TOKEN          - Token with repo permissions"
     echo "  CARGO_REGISTRY_TOKEN  - Token for crates.io publishing"
     exit 0
@@ -21,18 +21,8 @@ if ! command -v release-plz &> /dev/null; then
     exit 1
 fi
 
-# Check for tokens
-if [ -z "$GITHUB_TOKEN" ]; then
-    echo "Error: GITHUB_TOKEN is not set."
-    echo "Please export GITHUB_TOKEN=<your-token>"
-    exit 1
-fi
-
-if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
-    echo "Error: CARGO_REGISTRY_TOKEN is not set."
-    echo "Please export CARGO_REGISTRY_TOKEN=<your-token>"
-    exit 1
-fi
+# Note: release-plz relies on local `cargo login` and git credentials if tokens are not provided.
+# Ensure you are authenticated with crates.io and GitHub before running.
 
 echo "🚀 Starting manual release..."
 echo "release-plz version: $(release-plz --version)"
