@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 rusty-genius-core = { path = "../core" }
-facecrab = { package = "rusty-genius-facecrab", path = "../facecrab" }
+facecrab = { path = "../facecrab" }
 rusty-genius-brain-stem = { path = "../brainstem" }
 rusty-genius-brain-cortex = { path = "../cortex" }
 async-std = { version = "1.12", features = ["attributes"] }

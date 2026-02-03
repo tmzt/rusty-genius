@@ -40,14 +40,26 @@ mod tests {
                         stack.push(path);
                     } else if let Some(ext) = path.extension() {
                         if ext == "md" {
-                            if let Some(stem) = path.file_stem() {
-                                fixtures.push(Fixture {
-                                    path: path.clone(),
-                                    org: "Qwen".to_string(),
-                                    repo: "Qwen2.5-3B-Instruct".to_string(),
-                                    quant: "Q4_K_M".to_string(),
-                                    test_name: stem.to_string_lossy().to_string(),
-                                });
+                            // Path structure: .../fixtures/{ORG}/{REPO}/{QUANT}/{TEST}.md
+                            // We need to verify we are deep enough relative to base_path
+                            if let Ok(stripped) = path.strip_prefix(base_path) {
+                                let components: Vec<_> = stripped
+                                    .components()
+                                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                                    .collect();
+                                if components.len() == 4 {
+                                    fixtures.push(Fixture {
+                                        path: path.clone(),
+                                        org: components[0].clone(),
+                                        repo: components[1].clone(),
+                                        quant: components[2].clone(),
+                                        test_name: path
+                                            .file_stem()
+                                            .unwrap()
+                                            .to_string_lossy()
+                                            .to_string(),
+                                    });
+                                }
                             }
                         }
                     }
