@@ -1,0 +1,3 @@
+[alias]
+# Workspace-wide documentation
+doc-all = "doc --workspace --open"

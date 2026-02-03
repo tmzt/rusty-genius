@@ -27,7 +27,23 @@ pub enum BrainstemInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AssetEvent {
+    /// Starting resolution and download process
+    Started(String),
+    /// Download progress in bytes (current, total)
+    Progress(u64, u64),
+    /// Successfully downloaded
+    Complete(String),
+    /// Error during asset handling
+    Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BrainstemOutput {
+    /// Standard inference and thought events
     Event(InferenceEvent),
+    /// Progress/status of asset management
+    Asset(AssetEvent),
+    /// Catch-all for engine or orchestrator errors
     Error(String),
 }

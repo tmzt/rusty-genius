@@ -16,7 +16,9 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 #[cfg(feature = "real-engine")]
 use llama_cpp_2::model::params::LlamaModelParams;
 #[cfg(feature = "real-engine")]
-use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+#[cfg(feature = "real-engine")]
+use llama_cpp_2::sampling::LlamaSampler;
 #[cfg(feature = "real-engine")]
 use std::num::NonZeroU32;
 #[cfg(feature = "real-engine")]
@@ -202,18 +204,11 @@ impl Engine for Brain {
 
             loop {
                 // Sample next token
-                let next_token = match ctx.sample_token_greedy(batch.n_tokens() - 1) {
-                    Some(t) => t,
-                    None => {
-                        let _ = futures::executor::block_on(
-                            tx.send(Err(anyhow!("Failed to sample token"))),
-                        );
-                        break;
-                    }
-                };
+                let mut sampler = LlamaSampler::greedy();
+                let next_token = sampler.sample(&ctx, batch.n_tokens() - 1);
 
                 // Decode token to string
-                let token_str = match model.token_to_str(next_token) {
+                let token_str = match model.token_to_str(next_token, Special::Plaintext) {
                     Ok(s) => s.to_string(),
                     Err(_) => "??".to_string(),
                 };

@@ -3,7 +3,7 @@ use facecrab::AssetAuthority;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
-use rusty_genius_core::protocol::{BrainstemInput, BrainstemOutput};
+use rusty_genius_core::protocol::{AssetEvent, BrainstemInput, BrainstemOutput};
 use rusty_genius_cortex::{create_engine, Engine};
 use std::time::{Duration, Instant};
 
@@ -84,29 +84,23 @@ impl Orchestrator {
                     self.last_activity = Instant::now(); // Update activity
                     match msg {
                         BrainstemInput::LoadModel(name_or_path) => {
-                            // Try to resolve as a registry model first
-                            // If ensure_model fails (e.g. not in registry), we assume it's a direct path
-                            // Note: ensure_model returns Error if not found in registry currently.
-                            // We might want to check if it's a file path first?
-                            // For simplicity: Try registry, if error, treat as raw path.
+                            let mut events =
+                                self.asset_authority.ensure_model_stream(&name_or_path);
+                            let mut path_to_load = name_or_path.clone();
 
-                            let model_path =
-                                match self.asset_authority.ensure_model(&name_or_path).await {
-                                    Ok(path) => path.to_string_lossy().to_string(),
-                                    Err(e) => {
-                                        println!("Asset Authority Error: {:?}", e);
-                                        name_or_path // Fallback to raw path string
-                                    }
-                                };
+                            while let Some(event) = events.next().await {
+                                if let AssetEvent::Complete(path) = &event {
+                                    path_to_load = path.clone();
+                                }
+                                if let Err(_) = output_tx.send(BrainstemOutput::Asset(event)).await
+                                {
+                                    break;
+                                }
+                            }
 
-                            match self.engine.load_model(&model_path).await {
-                                Ok(_) => {
-                                    // Maybe send a success event?
-                                }
-                                Err(e) => {
-                                    let _ =
-                                        output_tx.send(BrainstemOutput::Error(e.to_string())).await;
-                                }
+                            // Finally load into engine
+                            if let Err(e) = self.engine.load_model(&path_to_load).await {
+                                let _ = output_tx.send(BrainstemOutput::Error(e.to_string())).await;
                             }
                         }
                         BrainstemInput::Infer { prompt, config: _ } => {

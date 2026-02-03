@@ -17,7 +17,7 @@ anyhow = "1.0"
 async-std = "1.12"
 futures = "0.3"
 async-trait = "0.1"
-llama-cpp-2 = { version = "0.1", optional = true } 
+llama-cpp-2 = { version = "=0.1.132", optional = true, features = ["sampler"] } 
 # Note: assuming llama-cpp-2 version. In a real scenario I'd check crates.io or use a git dep if needed. 
 # For this exercise, I'll assume 0.1 is fine or just rely on the user's environment / mock if it fails.
 # Actually, the user prompt says "llama-cpp-2 must be optional".

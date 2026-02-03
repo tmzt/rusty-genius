@@ -21,3 +21,9 @@ name = "qwen-2.5-3b-instruct"
 repo = "Qwen/Qwen2.5-3B-Instruct-GGUF"
 filename = "qwen2.5-3b-instruct-q4_k_m.gguf"
 quantization = "Q4_K_M"
+
+[[models]]
+name = "tiny-model"
+repo = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+filename = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+quantization = "Q4_K_M"
