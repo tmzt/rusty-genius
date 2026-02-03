@@ -11,7 +11,8 @@ jobs:
   notify-approval:
     name: Notify Approval Needed
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'tmzt' }}
+    environment: rusty-genius-publish
+    if: ${{ github.repository_owner == 'tmzt' }} # REQUIRED FOR SECURITY
     steps:
       - name: Provide Approval Link
         shell: bash
