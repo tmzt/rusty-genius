@@ -1,0 +1,32 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# OS / Environment
+.DS_Store
+.env
+.env.local
+
+# IDEs / Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Rusty-Genius Assets
+# Never commit heavy model weights
+*.gguf
+*.bin
+*.pth
+*.safetensors
+
+# Local Configuration Overrides
+# (If you create local test manifests)
+*.local.toml
+models.dev.toml
+
+# Brainteaser Fixtures
+# We want the folder structure and .md files, but not the weights
+crates/brainteaser/fixtures/**/*.gguf
+crates/brainteaser/fixtures/**/*.bin

@@ -1,0 +1,11 @@
+[[models]]
+name = "llama-2-7b-chat"
+repo = "TheBloke/Llama-2-7B-Chat-GGUF"
+filename = "llama-2-7b-chat.Q4_K_M.gguf"
+quantization = "Q4_K_M"
+
+[[models]]
+name = "mistral-7b-instruct"
+repo = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
+filename = "mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+quantization = "Q4_K_M"

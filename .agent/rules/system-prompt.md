@@ -2,7 +2,7 @@
 trigger: always_on
 ---
 
-Here is the comprehensive **System Generation Prompt**. You can paste this entire block into an LLM (like Claude 3.5 Sonnet, GPT-4o, or O3) to generate the complete `rusty-genius` codebase.
+Here is the **Final System Generation Prompt**. You can copy and paste this entire block directly into your LLM (Cursor, Claude 3.5 Sonnet, GPT-4o, etc.) to generate the `rusty-genius` codebase.
 
 ---
 
@@ -128,12 +128,18 @@ The project is a Cargo Workspace. All internal crates reside in `crates/` and us
 3. **Scripts (`scripts/metal.sh`):**
 * Generate a helper script for running heavy tests.
 * It must verify `cmake` exists (checking Homebrew paths `/opt/homebrew/bin` etc).
-* It must run `cargo test` on `brainteaser` with `--features "rusty-genius-brain-cortex/real-engine rusty-genius-brain-cortex/metal"`.
+* **Crucial:** Add an explicit instruction/comment in the project README and test documentation stating that **integration tests involving real models must ONLY be run via `./scripts/metal.sh**`. Running standard `cargo test` should default to the "Pinky" stub to avoid massive downloads and compilation times during standard development.
+* The script command should look like: `cargo test -p rusty-genius-brain-teaser --features "rusty-genius-brain-cortex/real-engine rusty-genius-brain-cortex/metal" -- --nocapture`
 
 
-4. **Generative Order:**
-* Begin with `Core` (Protocol & Errors).
-* Build `Facecrab` (Assets).
-* Build `Cortex` (Stub/Real Engine).
-* Build `Brainstem` (Orchestrator).
-* Finish with `Genius` (Facade) and `Brainteaser`.
+4. **Process Instructions:**
+* **Generative Order:** strictly follow this sequence:
+1. `crates/core` (Protocol)
+2. `crates/facecrab` (Assets)
+3. `crates/cortex` (Stub/Real Engine)
+4. `crates/brainstem` (Orchestrator)
+5. `crates/genius` (Facade)
+6. `crates/brainteaser` (Test Harness)
+
+
+* **Commits:** At the completion of each crate or major logical boundary, explicitly provide a **short, concise git commit message** (e.g., "feat(core): implement protocol enums and error definitions").

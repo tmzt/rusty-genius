@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/facecrab",
+    # "crates/cortex",
+    # "crates/brainstem",
+    # "crates/genius",
+    # "crates/brainteaser"
+]
+resolver = "2"
