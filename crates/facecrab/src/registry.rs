@@ -122,6 +122,10 @@ impl ModelRegistry {
         Ok(())
     }
 
+    pub fn list_models(&self) -> Vec<ModelEntry> {
+        self.models.values().cloned().collect()
+    }
+
     pub fn resolve(&self, name_or_spec: &str) -> Option<ModelSpec> {
         if let Some(entry) = self.models.get(name_or_spec) {
             return Some(ModelSpec {

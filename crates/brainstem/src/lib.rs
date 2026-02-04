@@ -19,6 +19,7 @@ pub struct Orchestrator {
     asset_authority: AssetAuthority,
     strategy: CortexStrategy,
     last_activity: Instant,
+    last_model_name: Option<String>,
 }
 
 impl Orchestrator {
@@ -31,7 +32,12 @@ impl Orchestrator {
             asset_authority,
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)), // Default 5 mins
             last_activity: Instant::now(),
+            last_model_name: None,
         })
+    }
+
+    pub fn set_strategy(&mut self, strategy: CortexStrategy) {
+        self.strategy = strategy;
     }
 
     /// Run the main event loop
@@ -100,11 +106,58 @@ impl Orchestrator {
                             // Finally load into engine
                             if let Err(e) = self.engine.load_model(&path_to_load).await {
                                 let _ = output_tx.send(BrainstemOutput::Error(e.to_string())).await;
+                            } else {
+                                self.last_model_name = Some(name_or_path);
                             }
                         }
-                        BrainstemInput::Infer { prompt, config: _ } => {
+                        BrainstemInput::Infer { prompt, config } => {
+                            // Cold Start Logic: If engine is not loaded but we have a last_model_name
+                            if !self.engine.is_loaded() {
+                                if let Some(model_name) = &self.last_model_name {
+                                    let start = Instant::now();
+                                    // We need to resolve path again or store path?
+                                    // For now, let's just trigger a load.
+                                    // Re-using the same logic as LoadModel but simplified.
+                                    let model_path =
+                                        self.asset_authority.ensure_model(model_name).await;
+                                    match model_path {
+                                        Ok(path) => {
+                                            if let Err(e) =
+                                                self.engine.load_model(path.to_str().unwrap()).await
+                                            {
+                                                let _ = output_tx
+                                                    .send(BrainstemOutput::Error(format!(
+                                                        "Cold reload failed: {}",
+                                                        e
+                                                    )))
+                                                    .await;
+                                            } else {
+                                                let duration = start.elapsed();
+                                                println!("NOTICE: Model reload took {:?}. Increase --unload-after or use --no-unload to avoid delay.", duration);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = output_tx
+                                                .send(BrainstemOutput::Error(format!(
+                                                    "Cold reload asset resolution failed: {}",
+                                                    e
+                                                )))
+                                                .await;
+                                        }
+                                    }
+                                } else {
+                                    let _ = output_tx
+                                        .send(BrainstemOutput::Error(
+                                            "No model loaded and no previous model to cold-start"
+                                                .to_string(),
+                                        ))
+                                        .await;
+                                    continue;
+                                }
+                            }
+
                             // Trigger inference
-                            match self.engine.infer(&prompt).await {
+                            match self.engine.infer(&prompt, config).await {
                                 Ok(mut event_rx) => {
                                     // Forward events to output
                                     while let Some(event_res) = event_rx.next().await {

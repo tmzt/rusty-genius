@@ -4,6 +4,7 @@ use async_std::task::{self, sleep};
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
+use rusty_genius_core::manifest::InferenceConfig;
 use rusty_genius_core::protocol::{InferenceEvent, ThoughtEvent};
 use std::time::Duration;
 
@@ -51,7 +52,15 @@ impl Engine for Pinky {
         Ok(())
     }
 
-    async fn infer(&mut self, prompt: &str) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+    fn is_loaded(&self) -> bool {
+        self.model_loaded
+    }
+
+    async fn infer(
+        &mut self,
+        prompt: &str,
+        _config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
         if !self.model_loaded {
             return Err(anyhow!("Pinky Error: No model loaded!"));
         }
@@ -98,6 +107,7 @@ impl Engine for Pinky {
 pub struct Brain {
     model: Option<Arc<LlamaModel>>,
     backend: Arc<LlamaBackend>,
+    model_loaded: bool,
 }
 
 #[cfg(feature = "real-engine")]
@@ -113,6 +123,7 @@ impl Default for Brain {
         Self {
             model: None,
             backend: Arc::new(LlamaBackend::init().expect("Failed to init llama backend")),
+            model_loaded: false,
         }
     }
 }
@@ -126,15 +137,25 @@ impl Engine for Brain {
         let model = LlamaModel::load_from_file(&self.backend, model_path, &params)
             .map_err(|e| anyhow!("Failed to load model from {}: {}", model_path, e))?;
         self.model = Some(Arc::new(model));
+        self.model_loaded = true;
         Ok(())
     }
 
     async fn unload_model(&mut self) -> Result<()> {
+        self.model_loaded = false;
         self.model = None;
         Ok(())
     }
 
-    async fn infer(&mut self, prompt: &str) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+    fn is_loaded(&self) -> bool {
+        self.model.is_some()
+    }
+
+    async fn infer(
+        &mut self,
+        prompt: &str,
+        config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
         let model = self
             .model
             .as_ref()
@@ -155,8 +176,8 @@ impl Engine for Brain {
             let backend_ref = &backend;
 
             // Create context
-            let ctx_params =
-                LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(2048).unwrap()));
+            let ctx_params = LlamaContextParams::default()
+                .with_n_ctx(config.context_size.and_then(|s| NonZeroU32::new(s)));
 
             let mut ctx = match model.new_context(backend_ref, ctx_params) {
                 Ok(c) => c,
@@ -229,7 +250,7 @@ impl Engine for Brain {
                 token_str_buffer.push_str(&token_str);
 
                 // If we are NOT in a think block, check if one is starting
-                if !in_think_block {
+                if !in_think_block && config.show_thinking {
                     if token_str_buffer.contains("<think>") {
                         in_think_block = true;
                         // Emit Start Thought event

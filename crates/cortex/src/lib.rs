@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::channel::mpsc;
+use rusty_genius_core::manifest::InferenceConfig;
 use rusty_genius_core::protocol::InferenceEvent;
 
 pub mod backend;
@@ -13,12 +14,15 @@ pub trait Engine: Send + Sync {
     /// Unload the currently loaded model to free resources
     async fn unload_model(&mut self) -> Result<()>;
 
+    /// Check if a model is currently loaded
+    fn is_loaded(&self) -> bool;
+
     /// Run inference
     /// Returns a channel of InferenceEvents
     async fn infer(
         &mut self,
         prompt: &str,
-        // config: InferenceConfig, // We might need to import this
+        config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
 }
 

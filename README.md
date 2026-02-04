@@ -42,6 +42,8 @@ graph TD
 
 The `ogenius` CLI provides an interactive chat REPL and an OpenAI-compatible API server, with automatic model downloading from Huggingface.
 
+See the [API Reference](crates/ogenius/docs/API.md) for details on how to use it from code.
+
 **Quick Install:**
 ```bash
 # Standard install (CPU only)

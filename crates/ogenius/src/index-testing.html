@@ -11,16 +11,14 @@
             --surface: #131317;
             --header: #1a1a20;
             --accent: #4f46e5;
-            --accent-muted: #4f46e533;
             --text: #e2e8f0;
             --text-muted: #94a3b8;
-            --border: #ffffff14;
         }
 
         body {
             background: var(--bg);
             color: var(--text);
-            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             margin: 0;
             display: flex;
             flex-direction: column;
@@ -29,82 +27,11 @@
 
         header {
             background: var(--header);
-            padding: 0.75rem 2rem;
+            padding: 1rem 2rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid var(--border);
-            z-index: 10;
-        }
-
-        .logo {
-            font-weight: 800;
-            font-size: 1.25rem;
-            letter-spacing: -0.025em;
-            background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .controls-container {
-            display: flex;
-            gap: 1.5rem;
-            align-items: center;
-            background: #ffffff05;
-            padding: 0.45rem 1rem;
-            border-radius: 12px;
-            border: 1px solid var(--border);
-        }
-
-        .control-item {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 0.85rem;
-            color: var(--text-muted);
-        }
-
-        select {
-            background: var(--surface);
-            color: var(--text);
-            border: 1px solid var(--border);
-            padding: 0.35rem 0.75rem;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            outline: none;
-            cursor: pointer;
-            transition: border-color 0.2s;
-        }
-
-        select:focus {
-            border-color: var(--accent);
-        }
-
-        input[type="checkbox"] {
-            appearance: none;
-            width: 1rem;
-            height: 1rem;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            cursor: pointer;
-            position: relative;
-            transition: background 0.2s, border-color 0.2s;
-        }
-
-        input[type="checkbox"]:checked {
-            background: var(--accent);
-            border-color: var(--accent);
-        }
-
-        input[type="checkbox"]:checked::after {
-            content: "✓";
-            position: absolute;
-            color: white;
-            font-size: 0.7rem;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            border-bottom: 1px solid #ffffff0a;
         }
 
         #chat-container {
@@ -113,47 +40,36 @@
             padding: 2rem;
             display: flex;
             flex-direction: column;
-            gap: 1.5rem;
-            max-width: 900px;
-            margin: 0 auto;
-            width: 100%;
-            box-sizing: border-box;
+            gap: 1rem;
         }
 
         .message {
-            max-width: 85%;
-            padding: 1rem 1.25rem;
-            border-radius: 16px;
-            line-height: 1.6;
-            font-size: 0.95rem;
+            max-width: 80%;
+            padding: 1rem;
+            border-radius: 12px;
+            line-height: 1.5;
         }
 
         .user {
             align-self: flex-end;
             background: var(--accent);
             color: white;
-            border-bottom-right-radius: 4px;
-            box-shadow: 0 4px 12px var(--accent-muted);
         }
 
         .assistant {
             align-self: flex-start;
             background: var(--surface);
-            border: 1px solid var(--border);
-            border-bottom-left-radius: 4px;
+            border: 1px solid #ffffff0a;
         }
 
         .thinking {
-            font-family: "JetBrains Mono", monospace;
-            font-size: 0.8rem;
+            font-style: italic;
             color: var(--text-muted);
-            margin-bottom: 0.75rem;
-            padding: 0.75rem 1rem;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            padding: 0.5rem;
             border-left: 2px solid var(--accent);
-            background: #ffffff03;
-            border-radius: 4px;
-            white-space: pre-wrap;
-            opacity: 0.8;
+            background: #ffffff05;
         }
 
         #input-area {
@@ -161,86 +77,57 @@
             padding: 1.5rem 2rem;
             display: flex;
             gap: 1rem;
-            border-top: 1px solid var(--border);
-            justify-content: center;
+            border-top: 1px solid #ffffff0a;
         }
 
-        .input-wrapper {
-            display: flex;
-            gap: 0.75rem;
-            width: 100%;
-            background: #ffffff03;
-            padding: 0.4rem;
-            border-radius: 12px;
-            border: 1px solid var(--border);
-        }
-
-        input[type="text"] {
+        input {
             flex: 1;
             background: var(--bg);
-            border: 1px solid var(--border);
+            border: 1px solid #ffffff14;
             color: white;
-            padding: 0.85rem 1.25rem;
-            border-radius: 12px;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
             outline: none;
-            font-size: 1rem;
-            transition: border-color 0.2s, box-shadow 0.2s;
         }
 
-        input[type="text"]:focus {
+        input:focus {
             border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-muted);
         }
 
-        button#send-btn {
+        button {
             background: var(--accent);
             color: white;
             border: none;
-            padding: 0 1.5rem;
-            border-radius: 12px;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
             cursor: pointer;
             font-weight: 600;
-            transition: transform 0.1s, opacity 0.2s;
         }
 
-        button#send-btn:hover {
+        button:hover {
             opacity: 0.9;
-        }
-
-        button#send-btn:active {
-            transform: scale(0.98);
-        }
-
-        button#send-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
         }
     </style>
 </head>
 
 <body>
     <header>
-        <div class="logo">ogenius</div>
-        <div class="controls-container">
-            <label class="control-item">
-                <input type="checkbox" id="thinking-toggle" checked>
-                <span>Thinking</span>
+        <div style="font-weight: bold; font-size: 1.2rem;">ogenius</div>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <label style="font-size: 0.8rem; color: var(--text-muted);">
+                <input type="checkbox" id="thinking-toggle" checked> Show Thinking
             </label>
-            <div class="control-item">
-                <select id="model-select">
-                    <option>Loading models...</option>
-                </select>
-            </div>
+            <select id="model-select">
+                <option>Loading models...</option>
+            </select>
         </div>
     </header>
 
     <div id="chat-container"></div>
 
     <div id="input-area">
-        <div class="input-wrapper">
-            <input type="text" id="user-input" placeholder="Ask a genius question..." autocomplete="off">
-            <button id="send-btn">Send</button>
-        </div>
+        <input type="text" id="user-input" placeholder="Type a message..." autocomplete="off">
+        <button id="send-btn">Send</button>
     </div>
 
     <script>
@@ -258,14 +145,8 @@
             try {
                 const res = await fetch('/v1/models');
                 const result = await res.json();
-                const models = result.models || [];
-                const preferred = result.preferred;
-
+                const models = result.data || [];
                 modelSelect.innerHTML = models.map(m => `<option value="${m.id}">${m.id}</option>`).join('');
-
-                if (preferred && models.some(m => m.id === preferred)) {
-                    modelSelect.value = preferred;
-                }
             } catch (e) {
                 modelSelect.innerHTML = '<option>Error loading models</option>';
             }
@@ -366,7 +247,6 @@
 
         loadModels();
         connectWS();
-        userInput.focus();
     </script>
 </body>
 

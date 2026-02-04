@@ -30,6 +30,8 @@ pub struct InferenceConfig {
     pub top_k: Option<u32>,
     pub repetition_penalty: Option<f32>,
     pub max_tokens: Option<usize>,
+    pub context_size: Option<u32>,
+    pub show_thinking: bool,
 }
 
 impl Default for InferenceConfig {
@@ -40,6 +42,8 @@ impl Default for InferenceConfig {
             top_k: Some(40),
             repetition_penalty: Some(1.1),
             max_tokens: None,
+            context_size: Some(2048),
+            show_thinking: true,
         }
     }
 }
