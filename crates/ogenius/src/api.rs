@@ -27,7 +27,7 @@ pub struct ModelListResponse {
 
 #[derive(Deserialize)]
 pub struct ChatMessage {
-    pub role: String,
+    pub _role: String,
     pub content: String,
 }
 
