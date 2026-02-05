@@ -17,6 +17,9 @@ pub trait Engine: Send + Sync {
     /// Check if a model is currently loaded
     fn is_loaded(&self) -> bool;
 
+    /// Get the default model name for this engine
+    fn default_model(&self) -> String;
+
     /// Run inference
     /// Returns a channel of InferenceEvents
     async fn infer(

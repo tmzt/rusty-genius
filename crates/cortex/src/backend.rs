@@ -56,6 +56,10 @@ impl Engine for Pinky {
         self.model_loaded
     }
 
+    fn default_model(&self) -> String {
+        "tiny-model".to_string()
+    }
+
     async fn infer(
         &mut self,
         prompt: &str,
@@ -149,6 +153,10 @@ impl Engine for Brain {
 
     fn is_loaded(&self) -> bool {
         self.model.is_some()
+    }
+
+    fn default_model(&self) -> String {
+        "Qwen/Qwen2.5-1.5B-Instruct".to_string()
     }
 
     async fn infer(

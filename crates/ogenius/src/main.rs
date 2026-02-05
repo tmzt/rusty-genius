@@ -192,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
 
                 input_tx
                     .send(BrainstemInput::Infer {
+                        model: Some(model.clone()),
                         prompt: prompt.to_string(),
                         config: config.clone(),
                     })
@@ -247,6 +248,7 @@ async fn main() -> anyhow::Result<()> {
             let state = ApiState {
                 input_tx: input_tx.clone(),
                 output_rx: api_output_rx,
+                ws_addr: ws_addr.clone(),
             };
 
             async_std::task::spawn(async move {
@@ -309,7 +311,8 @@ async fn main() -> anyhow::Result<()> {
             });
 
             app.at("/v1/models").get(list_models);
-            app.at("/v1/chat/completions").post(chat_completions);
+            app.at("/v1/chat_completions").post(chat_completions);
+            app.at("/v1/config").get(api::get_config);
 
             // WS server with real streaming
             let input_tx_ws = input_tx.clone();
@@ -343,8 +346,10 @@ async fn main() -> anyhow::Result<()> {
                         while let Some(Ok(Message::Text(input))) = stream.next().await {
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&input) {
                                 let prompt = json["prompt"].as_str().unwrap_or("").to_string();
+                                let model = json["model"].as_str().map(|s| s.to_string());
                                 let _ = input_tx
                                     .send(BrainstemInput::Infer {
+                                        model,
                                         prompt,
                                         config: inference_config.clone(),
                                     })

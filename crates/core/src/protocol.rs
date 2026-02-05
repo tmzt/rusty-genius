@@ -20,6 +20,7 @@ pub enum ThoughtEvent {
 pub enum BrainstemInput {
     LoadModel(String),
     Infer {
+        model: Option<String>,
         prompt: String,
         config: InferenceConfig,
     },

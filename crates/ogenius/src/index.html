@@ -280,42 +280,51 @@
             return div;
         }
 
-        function connectWS() {
-            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-            // Use the same host but port 8081 as defined in main.rs
-            const wsAddr = `${protocol}://${window.location.hostname}:8081`;
-            ws = new WebSocket(wsAddr);
+        async function connectWS() {
+            try {
+                const configRes = await fetch('/v1/config');
+                const config = await configRes.json();
+                const wsAddr = config.ws_addr.startsWith('ws')
+                    ? config.ws_addr
+                    : `ws://${window.location.hostname}:${config.ws_addr.split(':').pop()}`;
 
-            ws.onopen = () => console.log('Connected to WebSocket');
-            ws.onclose = () => {
-                console.log('Disconnected from WebSocket, retrying...');
-                setTimeout(connectWS, 1000);
-            };
+                console.log('Connecting to WebSocket:', wsAddr);
+                ws = new WebSocket(wsAddr);
 
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
+                ws.onopen = () => console.log('Connected to WebSocket');
+                ws.onclose = () => {
+                    console.log('Disconnected from WebSocket, retrying...');
+                    setTimeout(connectWS, 1000);
+                };
 
-                // BrainstemOutput handling
-                if (msg.Event) {
-                    const ev = msg.Event;
-                    if (ev === 'ProcessStart') {
-                        // Start of new response
-                    } else if (ev.Thought) {
-                        if (thinkingToggle.checked) {
-                            handleThought(ev.Thought);
+                ws.onmessage = (event) => {
+                    const msg = JSON.parse(event.data);
+
+                    // BrainstemOutput handling
+                    if (msg.Event) {
+                        const ev = msg.Event;
+                        if (ev === 'ProcessStart') {
+                            // Start of new response
+                        } else if (ev.Thought) {
+                            if (thinkingToggle.checked) {
+                                handleThought(ev.Thought);
+                            }
+                        } else if (ev.Content) {
+                            handleContent(ev.Content);
+                        } else if (ev === 'Complete') {
+                            currentAssistantMsg = null;
+                            currentThinkingBlock = null;
+                            userInput.disabled = false;
+                            sendBtn.disabled = false;
                         }
-                    } else if (ev.Content) {
-                        handleContent(ev.Content);
-                    } else if (ev === 'Complete') {
-                        currentAssistantMsg = null;
-                        currentThinkingBlock = null;
-                        userInput.disabled = false;
-                        sendBtn.disabled = false;
+                    } else if (msg.Error) {
+                        appendMessage('assistant', 'Error: ' + msg.Error);
                     }
-                } else if (msg.Error) {
-                    appendMessage('assistant', 'Error: ' + msg.Error);
-                }
-            };
+                };
+            } catch (e) {
+                console.error('Failed to connect to WebSocket:', e);
+                setTimeout(connectWS, 2000);
+            }
         }
 
         function handleThought(thought) {
@@ -364,6 +373,7 @@
             if (e.key === 'Enter') sendMessage();
         });
 
+        // Initialize
         loadModels();
         connectWS();
         userInput.focus();

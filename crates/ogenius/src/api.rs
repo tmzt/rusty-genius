@@ -65,6 +65,12 @@ pub struct ChatCompletionResponse {
 pub struct ApiState {
     pub input_tx: mpsc::Sender<BrainstemInput>,
     pub output_rx: Arc<Mutex<mpsc::Receiver<BrainstemOutput>>>,
+    pub ws_addr: String,
+}
+
+#[derive(Serialize)]
+pub struct ApiConfig {
+    pub ws_addr: String,
 }
 
 pub async fn list_models(_req: Request<ApiState>) -> tide::Result {
@@ -120,6 +126,7 @@ pub async fn chat_completions(mut req: Request<ApiState>) -> tide::Result {
     // Send inference request
     input_tx
         .send(BrainstemInput::Infer {
+            model: Some(body.model.clone()),
             prompt,
             config: InferenceConfig::default(),
         })
@@ -161,5 +168,14 @@ pub async fn chat_completions(mut req: Request<ApiState>) -> tide::Result {
 
     Ok(Response::builder(StatusCode::Ok)
         .body(serde_json::to_string(&response)?)
+        .build())
+}
+
+pub async fn get_config(req: Request<ApiState>) -> tide::Result {
+    let state = req.state();
+    Ok(Response::builder(StatusCode::Ok)
+        .body(serde_json::to_string(&ApiConfig {
+            ws_addr: state.ws_addr.clone(),
+        })?)
         .build())
 }

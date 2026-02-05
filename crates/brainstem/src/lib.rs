@@ -110,49 +110,49 @@ impl Orchestrator {
                                 self.last_model_name = Some(name_or_path);
                             }
                         }
-                        BrainstemInput::Infer { prompt, config } => {
-                            // Cold Start Logic: If engine is not loaded but we have a last_model_name
+                        BrainstemInput::Infer {
+                            model,
+                            prompt,
+                            config,
+                        } => {
+                            // Cold Start Logic: If engine is not loaded
                             if !self.engine.is_loaded() {
-                                if let Some(model_name) = &self.last_model_name {
-                                    let start = Instant::now();
-                                    // We need to resolve path again or store path?
-                                    // For now, let's just trigger a load.
-                                    // Re-using the same logic as LoadModel but simplified.
-                                    let model_path =
-                                        self.asset_authority.ensure_model(model_name).await;
-                                    match model_path {
-                                        Ok(path) => {
-                                            if let Err(e) =
-                                                self.engine.load_model(path.to_str().unwrap()).await
-                                            {
-                                                let _ = output_tx
-                                                    .send(BrainstemOutput::Error(format!(
-                                                        "Cold reload failed: {}",
-                                                        e
-                                                    )))
-                                                    .await;
-                                            } else {
-                                                let duration = start.elapsed();
-                                                println!("NOTICE: Model reload took {:?}. Increase --unload-after or use --no-unload to avoid delay.", duration);
-                                            }
-                                        }
-                                        Err(e) => {
+                                // Prefer the model requested in the message, fallback to last_model_name, fallback to engine default
+                                let model_to_load = model
+                                    .or_else(|| self.last_model_name.clone())
+                                    .unwrap_or_else(|| self.engine.default_model());
+
+                                let model_name = model_to_load;
+                                let start = Instant::now();
+                                let model_path =
+                                    self.asset_authority.ensure_model(&model_name).await;
+                                match model_path {
+                                    Ok(path) => {
+                                        if let Err(e) =
+                                            self.engine.load_model(path.to_str().unwrap()).await
+                                        {
                                             let _ = output_tx
                                                 .send(BrainstemOutput::Error(format!(
-                                                    "Cold reload asset resolution failed: {}",
+                                                    "Cold reload failed: {}",
                                                     e
                                                 )))
                                                 .await;
+                                            continue;
+                                        } else {
+                                            self.last_model_name = Some(model_name);
+                                            let duration = start.elapsed();
+                                            println!("NOTICE: Model reload took {:?}. Increase --unload-after or use --no-unload to avoid delay.", duration);
                                         }
                                     }
-                                } else {
-                                    let _ = output_tx
-                                        .send(BrainstemOutput::Error(
-                                            "No model loaded and no previous model to cold-start"
-                                                .to_string(),
-                                        ))
-                                        .await;
-                                    continue;
+                                    Err(e) => {
+                                        let _ = output_tx
+                                            .send(BrainstemOutput::Error(format!(
+                                                "Cold reload asset resolution failed: {}",
+                                                e
+                                            )))
+                                            .await;
+                                        continue;
+                                    }
                                 }
                             }
 
