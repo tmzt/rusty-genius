@@ -945,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "facecrab"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-std",
@@ -1736,7 +1736,7 @@ dependencies = [
 
 [[package]]
 name = "ogenius"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-std",
@@ -2127,7 +2127,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty-genius"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-std",
  "facecrab",
@@ -2139,7 +2139,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-genius-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "serde",
  "thiserror",
@@ -2147,7 +2147,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-genius-cortex"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-std",
@@ -2159,7 +2159,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-genius-stem"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-std",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "rusty-genius-teaser"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-std",

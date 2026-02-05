@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/tmzt/rusty-genius/compare/rusty-genius-v0.1.2...rusty-genius-v0.1.3) - 2026-02-05
+
+### Other
+
+- Commit ogenius changes
+- Commit ogenius CLI
+
 ### Added
 - **Refined Model Configuration**: Transitioned to a dual-file configuration system: `manifest.toml` for static user extensions and `registry.toml` for dynamic system tracking of model assets.
 - *Note: This implementation aligns the library with its intended local-first architecture, separating static user intent from dynamic system state.*

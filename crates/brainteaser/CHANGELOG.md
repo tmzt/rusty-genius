@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/tmzt/rusty-genius/compare/rusty-genius-teaser-v0.1.1...rusty-genius-teaser-v0.1.3) - 2026-02-05
+
+### Other
+
+- Commit ogenius changes
+- Commit ogenius CLI
+- Fix build, add git pre-push hook
+- (chore) release-plz update to v0.1.2
+- (chore) update examples
+- (chore) site: update badges
+
 ## [0.1.2](https://github.com/tmzt/rusty-genius/compare/rusty-genius-teaser-v0.1.1...rusty-genius-teaser-v0.1.2) - 2026-02-03
 
 ### Other
