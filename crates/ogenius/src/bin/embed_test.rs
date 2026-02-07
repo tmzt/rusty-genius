@@ -16,7 +16,7 @@ async fn setup_test_server(binary_path: &str, port: u16) -> Result<(Child, Strin
 
     // Launch ogenius serve
     let child = Command::new(binary_path)
-        .args(&["serve", "--addr", &addr, "--ws-addr", &ws_addr, "--no-open"])
+        .args(["serve", "--addr", &addr, "--ws-addr", &ws_addr, "--no-open"])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()?;
