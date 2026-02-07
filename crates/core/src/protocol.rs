@@ -18,7 +18,13 @@ pub enum ThoughtEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BrainstemInput {
+pub struct BrainstemInput {
+    pub id: Option<String>,
+    pub command: BrainstemCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BrainstemCommand {
     LoadModel(String),
     Infer {
         model: Option<String>,
@@ -32,7 +38,6 @@ pub enum BrainstemInput {
     },
     Stop,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AssetEvent {
     /// Starting resolution and download process
@@ -46,7 +51,13 @@ pub enum AssetEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BrainstemOutput {
+pub struct BrainstemOutput {
+    pub id: Option<String>,
+    pub body: BrainstemBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BrainstemBody {
     /// Standard inference and thought events
     Event(InferenceEvent),
     /// Progress/status of asset management

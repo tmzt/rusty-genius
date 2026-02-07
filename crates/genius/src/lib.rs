@@ -4,7 +4,9 @@ use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
 use rusty_genius_core::manifest::InferenceConfig;
-use rusty_genius_core::protocol::{BrainstemInput, BrainstemOutput, InferenceEvent};
+use rusty_genius_core::protocol::{
+    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, InferenceEvent,
+};
 use rusty_genius_stem::Orchestrator;
 use std::sync::Arc;
 
@@ -39,11 +41,22 @@ impl Genius {
         prompt: String,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<InferenceEvent>> {
+        let request_id = format!(
+            "facade-chat-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_micros()
+        );
+
         self.input_tx
-            .send(BrainstemInput::Infer {
-                model,
-                prompt,
-                config,
+            .send(BrainstemInput {
+                id: Some(request_id.clone()),
+                command: BrainstemCommand::Infer {
+                    model,
+                    prompt,
+                    config,
+                },
             })
             .await?;
 
@@ -53,15 +66,20 @@ impl Genius {
         async_std::task::spawn(async move {
             let mut output_rx = output_rx.lock().await;
             while let Some(output) = output_rx.next().await {
-                match output {
-                    BrainstemOutput::Event(event) => {
+                // Ignore events for other request IDs
+                if output.id != Some(request_id.clone()) {
+                    continue;
+                }
+
+                match output.body {
+                    BrainstemBody::Event(event) => {
                         if let InferenceEvent::Complete = event {
                             let _ = tx.send(event).await;
                             break;
                         }
                         let _ = tx.send(event).await;
                     }
-                    BrainstemOutput::Error(e) => {
+                    BrainstemBody::Error(e) => {
                         eprintln!("Error: {}", e);
                         break;
                     }
@@ -79,11 +97,22 @@ impl Genius {
         input: String,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<InferenceEvent>> {
+        let request_id = format!(
+            "facade-embed-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_micros()
+        );
+
         self.input_tx
-            .send(BrainstemInput::Embed {
-                model,
-                input,
-                config,
+            .send(BrainstemInput {
+                id: Some(request_id.clone()),
+                command: BrainstemCommand::Embed {
+                    model,
+                    input,
+                    config,
+                },
             })
             .await?;
 
@@ -93,15 +122,20 @@ impl Genius {
         async_std::task::spawn(async move {
             let mut output_rx = output_rx.lock().await;
             while let Some(output) = output_rx.next().await {
-                match output {
-                    BrainstemOutput::Event(event) => {
+                // Ignore events for other request IDs
+                if output.id != Some(request_id.clone()) {
+                    continue;
+                }
+
+                match output.body {
+                    BrainstemBody::Event(event) => {
                         if let InferenceEvent::Complete = event {
                             let _ = tx.send(event).await;
                             break;
                         }
                         let _ = tx.send(event).await;
                     }
-                    BrainstemOutput::Error(e) => {
+                    BrainstemBody::Error(e) => {
                         eprintln!("Error: {}", e);
                         break;
                     }

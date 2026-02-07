@@ -1749,6 +1749,7 @@ dependencies = [
  "rusty-genius-stem",
  "serde",
  "serde_json",
+ "surf",
  "tide",
  "tide-websockets",
 ]

@@ -1,6 +1,13 @@
 .PHONY: ogenius_tests
 
-ogenius_tests:
-	cargo build --release --bin ogenius --features metal
-	cp target/release/ogenius target/release/ogenius-metal
-	TEST_BINARY=target/release/ogenius-metal cargo test --package ogenius --test http_tests -- --test-threads=1
+test_binary := $(shell pwd)/target/release/ogenius-metal
+
+ogenius_metal:
+	cargo build --release -p ogenius --features metal
+	cp target/release/ogenius $(test_binary)
+
+ogenius_tests: ogenius_metal
+	TEST_BINARY=$(test_binary) cargo test --package ogenius --test http_tests -- --test-threads=1
+
+ogenius_embed: ogenius_metal
+	TEST_BINARY=$(test_binary) cargo run --package ogenius --bin embed_test

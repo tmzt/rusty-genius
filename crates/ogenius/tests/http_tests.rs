@@ -38,8 +38,8 @@ async fn setup_test_server(port: u16) -> (async_std::process::Child, String) {
     // Launch ogenius serve
     let child = async_std::process::Command::new(&binary_path)
         .args(&["serve", "--addr", &addr, "--ws-addr", &ws_addr, "--no-open"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()
         .expect("Failed to start ogenius");
 

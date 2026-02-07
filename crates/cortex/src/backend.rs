@@ -259,7 +259,6 @@ impl Engine for Brain {
             let n_decode = 0; // generated tokens count
             let max_tokens = 512; // Hard limit for safety
 
-            let mut think_buffer = String::new();
             let mut in_think_block = false;
             let mut token_str_buffer = String::new();
 
@@ -411,7 +410,6 @@ impl Engine for Brain {
             };
 
             // Prepare batch
-            let n_tokens = tokens_list.len();
             let mut batch = LlamaBatch::new(2048, 1);
 
             // Add all tokens to batch (no need for logits in embedding mode)
@@ -427,19 +425,16 @@ impl Engine for Brain {
 
             // Extract embeddings from the context
             // The embeddings are typically available after decode
-            let n_embd = model.n_embd() as usize;
-            let embeddings_ptr = ctx.embeddings_seq(0);
-
-            if embeddings_ptr.is_null() {
-                let _ = futures::executor::block_on(
-                    tx.send(Err(anyhow!("Failed to get embeddings from context"))),
-                );
-                return;
-            }
-
-            // Copy embeddings to a Vec
-            let embeddings: Vec<f32> =
-                unsafe { std::slice::from_raw_parts(embeddings_ptr, n_embd).to_vec() };
+            // Extract embeddings from the context
+            let embeddings = match ctx.embeddings_seq_ith(0) {
+                Ok(e) => e.to_vec(),
+                Err(e) => {
+                    let _ = futures::executor::block_on(
+                        tx.send(Err(anyhow!("Failed to get embeddings from context: {}", e))),
+                    );
+                    return;
+                }
+            };
 
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Embedding(embeddings))));
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Complete)));
