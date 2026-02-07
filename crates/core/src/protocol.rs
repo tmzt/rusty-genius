@@ -6,6 +6,7 @@ pub enum InferenceEvent {
     ProcessStart,
     Thought(ThoughtEvent),
     Content(String),
+    Embedding(Vec<f32>),
     Complete,
 }
 
@@ -22,6 +23,11 @@ pub enum BrainstemInput {
     Infer {
         model: Option<String>,
         prompt: String,
+        config: InferenceConfig,
+    },
+    Embed {
+        model: Option<String>,
+        input: String,
         config: InferenceConfig,
     },
     Stop,

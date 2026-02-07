@@ -1,11 +1,11 @@
 use async_std::sync::Mutex;
+use facecrab::registry::ModelRegistry;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
-use rusty_genius::core::protocol::{
+use rusty_genius_core::protocol::{
     BrainstemInput, BrainstemOutput, InferenceConfig, InferenceEvent,
 };
-use rusty_genius::facecrab::registry::ModelRegistry;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tide::{Request, Response, StatusCode};
@@ -59,6 +59,26 @@ pub struct ChatCompletionResponse {
     pub created: u64,
     pub model: String,
     pub choices: Vec<ChatChoice>,
+}
+
+#[derive(Deserialize)]
+pub struct EmbeddingRequest {
+    pub model: String,
+    pub input: String,
+}
+
+#[derive(Serialize)]
+pub struct EmbeddingData {
+    pub object: String,
+    pub embedding: Vec<f32>,
+    pub index: usize,
+}
+
+#[derive(Serialize)]
+pub struct EmbeddingResponse {
+    pub object: String,
+    pub data: Vec<EmbeddingData>,
+    pub model: String,
 }
 
 #[derive(Clone)]
@@ -164,6 +184,59 @@ pub async fn chat_completions(mut req: Request<ApiState>) -> tide::Result {
             },
             finish_reason: "stop".to_string(),
         }],
+    };
+
+    Ok(Response::builder(StatusCode::Ok)
+        .body(serde_json::to_string(&response)?)
+        .build())
+}
+
+pub async fn embeddings(mut req: Request<ApiState>) -> tide::Result {
+    let body: EmbeddingRequest = req.body_json().await?;
+    let state = req.state();
+
+    let input = body.input.clone();
+    let mut input_tx = state.input_tx.clone();
+
+    // Send embedding request
+    input_tx
+        .send(BrainstemInput::Embed {
+            model: Some(body.model.clone()),
+            input,
+            config: InferenceConfig::default(),
+        })
+        .await
+        .map_err(|e| tide::Error::from_str(500, e))?;
+
+    let mut output_rx = state.output_rx.lock().await;
+    let mut embedding_vec: Option<Vec<f32>> = None;
+
+    while let Some(output) = output_rx.next().await {
+        match output {
+            BrainstemOutput::Event(InferenceEvent::Embedding(emb)) => {
+                embedding_vec = Some(emb);
+            }
+            BrainstemOutput::Event(InferenceEvent::Complete) => {
+                break;
+            }
+            BrainstemOutput::Error(e) => {
+                return Err(tide::Error::from_str(500, e));
+            }
+            _ => {}
+        }
+    }
+
+    let embedding =
+        embedding_vec.ok_or_else(|| tide::Error::from_str(500, "No embedding returned"))?;
+
+    let response = EmbeddingResponse {
+        object: "list".to_string(),
+        data: vec![EmbeddingData {
+            object: "embedding".to_string(),
+            embedding,
+            index: 0,
+        }],
+        model: body.model,
     };
 
     Ok(Response::builder(StatusCode::Ok)

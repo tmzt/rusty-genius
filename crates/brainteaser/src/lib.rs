@@ -126,6 +126,7 @@ mod tests {
 
         input_tx
             .send(BrainstemInput::Infer {
+                model: Some("qwen-2.5-3b-instruct".to_string()),
                 prompt: prompt.clone(),
                 config: Default::default(),
             })

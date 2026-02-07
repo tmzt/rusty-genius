@@ -185,6 +185,80 @@ impl Orchestrator {
                                 }
                             }
                         }
+                        BrainstemInput::Embed {
+                            model,
+                            input,
+                            config,
+                        } => {
+                            // Cold Start Logic: Same as Infer
+                            if !self.engine.is_loaded() {
+                                let model_to_load = model
+                                    .or_else(|| self.last_model_name.clone())
+                                    .unwrap_or_else(|| self.engine.default_model());
+
+                                let model_name = model_to_load;
+                                let start = Instant::now();
+                                let model_path =
+                                    self.asset_authority.ensure_model(&model_name).await;
+                                match model_path {
+                                    Ok(path) => {
+                                        if let Err(e) =
+                                            self.engine.load_model(path.to_str().unwrap()).await
+                                        {
+                                            let _ = output_tx
+                                                .send(BrainstemOutput::Error(format!(
+                                                    "Cold reload failed: {}",
+                                                    e
+                                                )))
+                                                .await;
+                                            continue;
+                                        } else {
+                                            self.last_model_name = Some(model_name);
+                                            let duration = start.elapsed();
+                                            println!("NOTICE: Model reload took {:?}. Increase --unload-after or use --no-unload to avoid delay.", duration);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = output_tx
+                                            .send(BrainstemOutput::Error(format!(
+                                                "Cold reload asset resolution failed: {}",
+                                                e
+                                            )))
+                                            .await;
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            // Trigger embedding
+                            match self.engine.embed(&input, config).await {
+                                Ok(mut event_rx) => {
+                                    // Forward events to output
+                                    while let Some(event_res) = event_rx.next().await {
+                                        match event_res {
+                                            Ok(event) => {
+                                                if output_tx
+                                                    .send(BrainstemOutput::Event(event))
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    break; // Receiver dropped
+                                                }
+                                            }
+                                            Err(e) => {
+                                                let _ = output_tx
+                                                    .send(BrainstemOutput::Error(e.to_string()))
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ =
+                                        output_tx.send(BrainstemOutput::Error(e.to_string())).await;
+                                }
+                            }
+                        }
                         BrainstemInput::Stop => {
                             break;
                         }

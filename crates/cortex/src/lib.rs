@@ -27,6 +27,14 @@ pub trait Engine: Send + Sync {
         prompt: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
+
+    /// Generate embeddings
+    /// Returns a channel of InferenceEvents (will emit Embedding event)
+    async fn embed(
+        &mut self,
+        input: &str,
+        config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
 }
 
 pub async fn create_engine() -> Box<dyn Engine> {

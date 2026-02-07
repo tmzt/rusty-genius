@@ -103,6 +103,32 @@ impl Engine for Pinky {
 
         Ok(rx)
     }
+
+    async fn embed(
+        &mut self,
+        input: &str,
+        _config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+        if !self.model_loaded {
+            return Err(anyhow!("Pinky Error: No model loaded!"));
+        }
+
+        let (mut tx, rx) = mpsc::channel(100);
+        let _input = input.to_string();
+
+        task::spawn(async move {
+            let _ = tx.send(Ok(InferenceEvent::ProcessStart)).await;
+            task::sleep(Duration::from_millis(50)).await;
+
+            // Generate a simple mock embedding (384 dimensions with random-ish values)
+            let mock_embedding: Vec<f32> = (0..384).map(|i| (i as f32 * 0.01).sin()).collect();
+
+            let _ = tx.send(Ok(InferenceEvent::Embedding(mock_embedding))).await;
+            let _ = tx.send(Ok(InferenceEvent::Complete)).await;
+        });
+
+        Ok(rx)
+    }
 }
 
 // --- Brain (Real) ---
@@ -332,6 +358,90 @@ impl Engine for Brain {
                 }
             }
 
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Complete)));
+        });
+
+        Ok(rx)
+    }
+
+    async fn embed(
+        &mut self,
+        input: &str,
+        config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| anyhow!("No model loaded"))?
+            .clone();
+
+        let backend = self.backend.clone();
+        let input_str = input.to_string();
+        let (mut tx, rx) = mpsc::channel(100);
+
+        task::spawn_blocking(move || {
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::ProcessStart)));
+
+            let backend_ref = &backend;
+
+            // Create context for embeddings
+            let ctx_params = LlamaContextParams::default()
+                .with_n_ctx(config.context_size.and_then(|s| NonZeroU32::new(s)))
+                .with_embeddings(true); // Enable embedding mode
+
+            let mut ctx = match model.new_context(backend_ref, ctx_params) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = futures::executor::block_on(
+                        tx.send(Err(anyhow!("Context creation failed: {}", e))),
+                    );
+                    return;
+                }
+            };
+
+            // Tokenize input
+            let tokens_list = match model.str_to_token(&input_str, AddBos::Always) {
+                Ok(t) => t,
+                Err(e) => {
+                    let _ = futures::executor::block_on(
+                        tx.send(Err(anyhow!("Tokenize failed: {}", e))),
+                    );
+                    return;
+                }
+            };
+
+            // Prepare batch
+            let n_tokens = tokens_list.len();
+            let mut batch = LlamaBatch::new(2048, 1);
+
+            // Add all tokens to batch (no need for logits in embedding mode)
+            for (i, token) in tokens_list.iter().enumerate() {
+                let _ = batch.add(*token, i as i32, &[0], false);
+            }
+
+            // Decode to get embeddings
+            if let Err(e) = ctx.decode(&mut batch) {
+                let _ = futures::executor::block_on(tx.send(Err(anyhow!("Decode failed: {}", e))));
+                return;
+            }
+
+            // Extract embeddings from the context
+            // The embeddings are typically available after decode
+            let n_embd = model.n_embd() as usize;
+            let embeddings_ptr = ctx.embeddings_seq(0);
+
+            if embeddings_ptr.is_null() {
+                let _ = futures::executor::block_on(
+                    tx.send(Err(anyhow!("Failed to get embeddings from context"))),
+                );
+                return;
+            }
+
+            // Copy embeddings to a Vec
+            let embeddings: Vec<f32> =
+                unsafe { std::slice::from_raw_parts(embeddings_ptr, n_embd).to_vec() };
+
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Embedding(embeddings))));
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Complete)));
         });
 

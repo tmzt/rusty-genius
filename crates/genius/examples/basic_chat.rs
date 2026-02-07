@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sending prompt: '{}'", prompt);
     input
         .send(BrainstemInput::Infer {
+            model: Some(model_name.into()),
             prompt: prompt.into(),
             config: Default::default(),
         })

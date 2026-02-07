@@ -26,10 +26,10 @@ use colored::*;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
-use rusty_genius::core::protocol::{
+use rusty_genius_core::protocol::{
     AssetEvent, BrainstemInput, BrainstemOutput, InferenceConfig, InferenceEvent,
 };
-use rusty_genius::Orchestrator;
+use rusty_genius_stem::Orchestrator;
 use std::io::{self, Write};
 use std::sync::Arc;
 use tide_websockets::{Message, WebSocket};
@@ -89,6 +89,20 @@ enum Commands {
         /// Show thinking tokens
         #[arg(long, default_value = "true")]
         show_thinking: bool,
+    },
+    /// Generate embeddings for input text
+    Embed {
+        /// Model repository
+        #[arg(long, default_value = "Qwen/Qwen2.5-1.5B-Instruct")]
+        model: String,
+        /// Quantization level
+        #[arg(long, default_value = "Q4_K_M")]
+        quant: String,
+        /// Input text to embed
+        input: String,
+        /// Context size
+        #[arg(long, default_value = "2048")]
+        context_size: u32,
     },
 }
 
@@ -220,6 +234,74 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Embed {
+            model,
+            quant: _,
+            input,
+            context_size,
+        } => {
+            println!("🔢 Generating embeddings using {}", model.cyan());
+            let mut orchestrator = Orchestrator::new().await?;
+            let (mut input_tx, input_rx) = mpsc::channel(10);
+            let (output_tx, mut output_rx) = mpsc::channel(10);
+
+            async_std::task::spawn(async move {
+                let _ = orchestrator.run(input_rx, output_tx).await;
+            });
+
+            let config = InferenceConfig {
+                context_size: Some(context_size),
+                show_thinking: false,
+                ..Default::default()
+            };
+
+            // Pre-load model
+            input_tx
+                .send(BrainstemInput::LoadModel(model.clone()))
+                .await?;
+            println!("⏳ Loading model...");
+
+            while let Some(output) = output_rx.next().await {
+                match output {
+                    BrainstemOutput::Asset(AssetEvent::Complete(_)) => break,
+                    BrainstemOutput::Error(e) => {
+                        eprintln!("❌ Failed to load: {}", e.red());
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+            println!("✅ Model loaded!");
+
+            // Send embedding request
+            input_tx
+                .send(BrainstemInput::Embed {
+                    model: Some(model),
+                    input,
+                    config,
+                })
+                .await?;
+
+            println!("⏳ Generating embedding...");
+
+            while let Some(output) = output_rx.next().await {
+                match output {
+                    BrainstemOutput::Event(InferenceEvent::Embedding(emb)) => {
+                        println!("✅ Embedding generated ({} dimensions)", emb.len());
+                        println!("First 10 values: {:?}", &emb[..10.min(emb.len())]);
+                        break;
+                    }
+                    BrainstemOutput::Event(InferenceEvent::Complete) => {
+                        break;
+                    }
+                    BrainstemOutput::Error(e) => {
+                        eprintln!("❌ Error: {}", e.red());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
         Commands::Serve {
             addr,
             ws_addr,
@@ -312,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
 
             app.at("/v1/models").get(list_models);
             app.at("/v1/chat_completions").post(chat_completions);
+            app.at("/v1/embeddings").post(api::embeddings);
             app.at("/v1/config").get(api::get_config);
 
             // WS server with real streaming
