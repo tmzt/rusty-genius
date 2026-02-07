@@ -25,7 +25,7 @@ async fn setup_test_server(binary_path: &str, port: u16) -> Result<(Child, Strin
     let base_url = format!("http://{}", addr);
     for _ in 0..30 {
         task::sleep(Duration::from_millis(200)).await;
-        if surf::get(&format!("{}/v1/models", base_url)).await.is_ok() {
+        if surf::get(format!("{}/v1/models", base_url)).await.is_ok() {
             return Ok((child, base_url));
         }
     }
