@@ -84,6 +84,9 @@ enum Commands {
         /// Show thinking tokens
         #[arg(long, default_value = "true")]
         show_thinking: bool,
+        /// Models to pre-load (download/verify) before starting
+        #[arg(long)]
+        load_models: Vec<String>,
     },
     /// Generate embeddings for input text
     Embed {
@@ -100,6 +103,111 @@ enum Commands {
         #[arg(long, default_value = "2048")]
         context_size: u32,
     },
+}
+
+/// Pre-load and verify models in parallel with progress tracking
+async fn wait_for_models(load_models: Vec<String>) -> Result<()> {
+    if load_models.is_empty() {
+        return Ok(());
+    }
+
+    println!("📦 Pre-loading {} models...", load_models.len());
+    let authority = facecrab::AssetAuthority::new()?;
+    let multi_progress = MultiProgress::new();
+    let is_tty = io::stdout().is_terminal();
+
+    if !is_tty {
+        println!("Running in non-interactive mode. Progress bars disabled.");
+        multi_progress.set_draw_target(ProgressDrawTarget::hidden());
+    }
+
+    let tasks: Vec<_> = load_models
+        .iter()
+        .map(|m| {
+            let auth = &authority;
+            let name = m.clone();
+            let pb = multi_progress.add(ProgressBar::new(0));
+            pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
+                .unwrap()
+                .progress_chars("#>-"));
+            pb.set_message(format!("Waiting: {}", name));
+
+            async move {
+                let mut stream = auth.ensure_model_stream(&name);
+                let mut last_path = None;
+                let mut last_pct = 0;
+                while let Some(event) = stream.next().await {
+                    match event {
+                        AssetEvent::Started(_) => {
+                            if is_tty {
+                                pb.set_message(format!("Downloading: {}", name));
+                            } else {
+                                println!("Downloading: {}", name);
+                            }
+                        }
+                        AssetEvent::Progress(current, total) => {
+                            if is_tty {
+                                pb.set_length(total);
+                                pb.set_position(current);
+                            } else if total > 0 {
+                                let current_pct = (current * 100) / total;
+                                if current_pct >= last_pct + 10 {
+                                    println!("Downloading: {} {}%", name, current_pct);
+                                    last_pct = current_pct;
+                                }
+                            }
+                        }
+                        AssetEvent::Complete(path) => {
+                            if is_tty {
+                                pb.finish_with_message(format!("✅ Ready: {}", name));
+                            } else {
+                                println!("✅ Ready: {}", name);
+                            }
+                            last_path = Some(std::path::PathBuf::from(path));
+                        }
+                        AssetEvent::Error(e) => {
+                            if is_tty {
+                                pb.abandon_with_message(format!("❌ Error: {}", e));
+                            } else {
+                                println!("❌ Error: {}", e);
+                            }
+                            return Err(anyhow::anyhow!("Failed to download {}: {}", name, e));
+                        }
+                    }
+                }
+                if let Some(path) = last_path {
+                    Ok(path)
+                } else {
+                    Err(anyhow::anyhow!("Stream ended without completion for {}", name))
+                }
+            }
+        })
+        .collect();
+
+    let results = futures::future::join_all(tasks).await;
+
+    // Clear multi_progress to ensure output below it prints clean
+    let _ = multi_progress.clear();
+
+    let mut failures = Vec::new();
+    for (i, res) in results.into_iter().enumerate() {
+        match res {
+            Ok(path) => {
+                println!("✅ Ready: {} ({})", load_models[i].green(), path.display());
+            }
+            Err(e) => failures.push(format!("{}: {}", load_models[i], e)),
+        }
+    }
+
+    if !failures.is_empty() {
+        eprintln!("\n❌ Failed to load some models:");
+        for f in failures {
+            eprintln!("  - {}", f.red());
+        }
+        anyhow::bail!("Failed to load some models");
+    }
+    println!("✨ All models loaded.\n");
+    Ok(())
 }
 
 #[async_std::main]
@@ -164,7 +272,11 @@ async fn main() -> anyhow::Result<()> {
             quant: _,
             context_size,
             show_thinking,
+            load_models,
         } => {
+            // Pre-load models if requested
+            wait_for_models(load_models).await?;
+
             println!("💬 Starting chat with {}", model.cyan());
             let mut orchestrator = Orchestrator::new().await?;
             let (mut input_tx, input_rx) = mpsc::channel(100);
@@ -338,105 +450,8 @@ async fn main() -> anyhow::Result<()> {
             show_thinking,
             load_models,
         } => {
-            // 1. Parallel Model Loading
-            if !load_models.is_empty() {
-                println!("📦 Pre-loading {} models...", load_models.len());
-                let authority = facecrab::AssetAuthority::new()?;
-                let multi_progress = MultiProgress::new();
-                let is_tty = io::stdout().is_terminal();
-
-                if !is_tty {
-                    println!("Running in non-interactive mode. Progress bars disabled.");
-                    multi_progress.set_draw_target(ProgressDrawTarget::hidden());
-                }
-
-                let tasks: Vec<_> = load_models
-                    .iter()
-                    .map(|m| {
-                        let auth = &authority;
-                        let name = m.clone();
-                        let pb = multi_progress.add(ProgressBar::new(0));
-                        pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
-                            .unwrap()
-                            .progress_chars("#>-"));
-                        pb.set_message(format!("Waiting: {}", name));
-
-                        async move {
-                            let mut stream = auth.ensure_model_stream(&name);
-                            let mut last_path = None;
-                            let mut last_pct = 0;
-                            while let Some(event) = stream.next().await {
-                                match event {
-                                    AssetEvent::Started(_) => {
-                                        if is_tty {
-                                            pb.set_message(format!("Downloading: {}", name));
-                                        } else {
-                                            println!("Downloading: {}", name);
-                                        }
-                                    }
-                                    AssetEvent::Progress(current, total) => {
-                                        if is_tty {
-                                            pb.set_length(total);
-                                            pb.set_position(current);
-                                        } else if total > 0 {
-                                            let current_pct = (current * 100) / total;
-                                            if current_pct >= last_pct + 10 {
-                                                println!("Downloading: {} {}%", name, current_pct);
-                                                last_pct = current_pct;
-                                            }
-                                        }
-                                    }
-                                    AssetEvent::Complete(path) => {
-                                        if is_tty {
-                                            pb.finish_with_message(format!("✅ Ready: {}", name));
-                                        } else {
-                                            println!("✅ Ready: {}", name);
-                                        }
-                                        last_path = Some(std::path::PathBuf::from(path));
-                                    }
-                                    AssetEvent::Error(e) => {
-                                        if is_tty {
-                                            pb.abandon_with_message(format!("❌ Error: {}", e));
-                                        } else {
-                                            println!("❌ Error: {}", e);
-                                        }
-                                        return Err(anyhow::anyhow!("Failed to download {}: {}", name, e));
-                                    }
-                                }
-                            }
-                            if let Some(path) = last_path {
-                                Ok(path)
-                            } else {
-                                Err(anyhow::anyhow!("Stream ended without completion for {}", name))
-                            }
-                        }
-                    })
-                    .collect();
-
-                let results = futures::future::join_all(tasks).await;
-
-                // Clear multi_progress to ensure output below it prints clean
-                let _ = multi_progress.clear();
-
-                let mut failures = Vec::new();
-                for (i, res) in results.into_iter().enumerate() {
-                    match res {
-                        Ok(path) => {
-                            println!("✅ Ready: {} ({})", load_models[i].green(), path.display());
-                        }
-                        Err(e) => failures.push(format!("{}: {}", load_models[i], e)),
-                    }
-                }
-
-                if !failures.is_empty() {
-                    eprintln!("\n❌ Failed to load some models:");
-                    for f in failures {
-                        eprintln!("  - {}", f.red());
-                    }
-                    std::process::exit(1);
-                }
-                println!("✨ All models loaded. Starting server...\n");
-            }
+            // Pre-load models if requested
+            wait_for_models(load_models).await?;
 
             println!("DEBUG: Initializing Orchestrator...");
             let _ = io::stdout().flush();
