@@ -1,5 +1,7 @@
 # NOTE: Cargo.lock is currently tracked for development stability. Since this is a library, Cargo.lock should be restored to .gitignore before publishing to crates.io.
 
+.private/
+
 # Rust / Cargo
 /target/
 **/*.rs.bk
