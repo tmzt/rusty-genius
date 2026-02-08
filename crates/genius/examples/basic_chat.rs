@@ -1,7 +1,9 @@
 use futures::{channel::mpsc, sink::SinkExt, StreamExt};
 
-use rusty_genius::core::protocol::{AssetEvent, BrainstemInput, BrainstemOutput, InferenceEvent};
-use rusty_genius::Orchestrator;
+use rusty_genius_core::protocol::{
+    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, InferenceEvent,
+};
+use rusty_genius_stem::Orchestrator;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,28 +18,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 2. Select model (downloads and verifies automatically)
+    // 2. Select model
     let model_name = "tiny-model";
     println!("Loading model: {}...", model_name);
     input
-        .send(BrainstemInput::LoadModel(model_name.into()))
+        .send(BrainstemInput {
+            id: None,
+            command: BrainstemCommand::LoadModel(model_name.into()),
+        })
         .await?;
 
     // 3. Submit prompt
     let prompt = "Once upon a time, in the world of systems programming, there was a language called Rust...";
     println!("Sending prompt: '{}'", prompt);
     input
-        .send(BrainstemInput::Infer {
-            prompt: prompt.into(),
-            config: Default::default(),
+        .send(BrainstemInput {
+            id: None,
+            command: BrainstemCommand::Infer {
+                model: Some(model_name.into()),
+                prompt: prompt.into(),
+                config: Default::default(),
+            },
         })
         .await?;
 
     // 4. Stream results
     println!("--- Messages ---");
     while let Some(msg) = output.next().await {
-        match msg {
-            BrainstemOutput::Asset(a) => match a {
+        match msg.body {
+            BrainstemBody::Asset(a) => match a {
                 AssetEvent::Started(s) => println!("[Asset] Starting: {}", s),
                 AssetEvent::Progress(c, t) => {
                     let pct = (c as f64 / t as f64) * 100.0;
@@ -47,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 AssetEvent::Complete(s) => println!("\n[Asset] Ready: {}", s),
                 AssetEvent::Error(e) => eprintln!("\n[Asset] Error: {}", e),
             },
-            BrainstemOutput::Event(e) => match e {
+            BrainstemBody::Event(e) => match e {
                 InferenceEvent::Content(c) => {
                     print!("{}", c);
                     std::io::Write::flush(&mut std::io::stdout())?;
@@ -62,10 +71,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 InferenceEvent::Thought(_t) => {
                     // Optionally handle thoughts here
                 }
+                _ => {}
             },
-            BrainstemOutput::Error(err) => {
+            BrainstemBody::Error(err) => {
                 eprintln!("\nBrainstem Error: {}", err);
                 break;
+            }
+            BrainstemBody::ModelList(_) => {
+                // Ignored in this example
             }
         }
     }

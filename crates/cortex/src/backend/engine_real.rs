@@ -1,117 +1,52 @@
+#![cfg(feature = "real-engine")]
+
 use crate::Engine;
 use anyhow::{anyhow, Result};
-use async_std::task::{self, sleep};
+use async_std::task;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
-use rusty_genius_core::protocol::{InferenceEvent, ThoughtEvent};
-use std::time::Duration;
-
-#[cfg(feature = "real-engine")]
 use llama_cpp_2::context::params::LlamaContextParams;
-#[cfg(feature = "real-engine")]
 use llama_cpp_2::llama_backend::LlamaBackend;
-#[cfg(feature = "real-engine")]
 use llama_cpp_2::llama_batch::LlamaBatch;
-#[cfg(feature = "real-engine")]
 use llama_cpp_2::model::params::LlamaModelParams;
-#[cfg(feature = "real-engine")]
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
-#[cfg(feature = "real-engine")]
 use llama_cpp_2::sampling::LlamaSampler;
-#[cfg(feature = "real-engine")]
+use rusty_genius_core::manifest::InferenceConfig;
+use rusty_genius_core::protocol::{InferenceEvent, ThoughtEvent};
 use std::num::NonZeroU32;
-#[cfg(feature = "real-engine")]
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-// --- Pinky (Stub) ---
+static LLAMA_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 
-pub struct Pinky {
+fn get_llama_backend() -> Arc<LlamaBackend> {
+    LLAMA_BACKEND
+        .get_or_init(|| Arc::new(LlamaBackend::init().expect("Failed to init llama backend")))
+        .clone()
+}
+
+pub struct Brain {
+    model: Option<Arc<LlamaModel>>,
+    backend: Arc<LlamaBackend>,
     model_loaded: bool,
 }
 
-impl Pinky {
+impl Brain {
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for Brain {
+    fn default() -> Self {
         Self {
+            model: None,
+            backend: get_llama_backend(),
             model_loaded: false,
         }
     }
 }
 
-#[async_trait]
-impl Engine for Pinky {
-    async fn load_model(&mut self, _model_path: &str) -> Result<()> {
-        // Simulate loading time
-        sleep(Duration::from_millis(100)).await;
-        self.model_loaded = true;
-        Ok(())
-    }
-
-    async fn unload_model(&mut self) -> Result<()> {
-        self.model_loaded = false;
-        Ok(())
-    }
-
-    async fn infer(&mut self, prompt: &str) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
-        if !self.model_loaded {
-            return Err(anyhow!("Pinky Error: No model loaded!"));
-        }
-
-        let (mut tx, rx) = mpsc::channel(100);
-        let prompt = prompt.to_string();
-
-        task::spawn(async move {
-            let _ = tx.send(Ok(InferenceEvent::ProcessStart)).await;
-            task::sleep(Duration::from_millis(50)).await;
-
-            // Emit a "thought"
-            let _ = tx
-                .send(Ok(InferenceEvent::Thought(ThoughtEvent::Start)))
-                .await;
-            let _ = tx
-                .send(Ok(InferenceEvent::Thought(ThoughtEvent::Delta(
-                    "Narf!".to_string(),
-                ))))
-                .await;
-            task::sleep(Duration::from_millis(50)).await;
-            let _ = tx
-                .send(Ok(InferenceEvent::Thought(ThoughtEvent::Stop)))
-                .await;
-
-            // Emit content (echo prompt mostly)
-            let _ = tx
-                .send(Ok(InferenceEvent::Content(format!(
-                    "Pinky says: {}",
-                    prompt
-                ))))
-                .await;
-
-            let _ = tx.send(Ok(InferenceEvent::Complete)).await;
-        });
-
-        Ok(rx)
-    }
-}
-
-// --- Brain (Real) ---
-
-#[cfg(feature = "real-engine")]
-pub struct Brain {
-    model: Option<Arc<LlamaModel>>,
-    backend: Arc<LlamaBackend>,
-}
-
-#[cfg(feature = "real-engine")]
-impl Brain {
-    pub fn new() -> Self {
-        Self {
-            model: None,
-            backend: Arc::new(LlamaBackend::init().expect("Failed to init llama backend")),
-        }
-    }
-}
-
-#[cfg(feature = "real-engine")]
 #[async_trait]
 impl Engine for Brain {
     async fn load_model(&mut self, model_path: &str) -> Result<()> {
@@ -120,15 +55,29 @@ impl Engine for Brain {
         let model = LlamaModel::load_from_file(&self.backend, model_path, &params)
             .map_err(|e| anyhow!("Failed to load model from {}: {}", model_path, e))?;
         self.model = Some(Arc::new(model));
+        self.model_loaded = true;
         Ok(())
     }
 
     async fn unload_model(&mut self) -> Result<()> {
+        self.model_loaded = false;
         self.model = None;
         Ok(())
     }
 
-    async fn infer(&mut self, prompt: &str) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+    fn is_loaded(&self) -> bool {
+        self.model.is_some()
+    }
+
+    fn default_model(&self) -> String {
+        "Qwen/Qwen2.5-1.5B-Instruct".to_string()
+    }
+
+    async fn infer(
+        &mut self,
+        prompt: &str,
+        config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
         let model = self
             .model
             .as_ref()
@@ -149,8 +98,8 @@ impl Engine for Brain {
             let backend_ref = &backend;
 
             // Create context
-            let ctx_params =
-                LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(2048).unwrap()));
+            let ctx_params = LlamaContextParams::default()
+                .with_n_ctx(config.context_size.and_then(|s| NonZeroU32::new(s)));
 
             let mut ctx = match model.new_context(backend_ref, ctx_params) {
                 Ok(c) => c,
@@ -198,7 +147,6 @@ impl Engine for Brain {
             let n_decode = 0; // generated tokens count
             let max_tokens = 512; // Hard limit for safety
 
-            let mut think_buffer = String::new();
             let mut in_think_block = false;
             let mut token_str_buffer = String::new();
 
@@ -223,7 +171,7 @@ impl Engine for Brain {
                 token_str_buffer.push_str(&token_str);
 
                 // If we are NOT in a think block, check if one is starting
-                if !in_think_block {
+                if !in_think_block && config.show_thinking {
                     if token_str_buffer.contains("<think>") {
                         in_think_block = true;
                         // Emit Start Thought event
@@ -297,6 +245,86 @@ impl Engine for Brain {
                 }
             }
 
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Complete)));
+        });
+
+        Ok(rx)
+    }
+
+    async fn embed(
+        &mut self,
+        input: &str,
+        config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+        let model = self
+            .model
+            .as_ref()
+            .ok_or_else(|| anyhow!("No model loaded"))?
+            .clone();
+
+        let backend = self.backend.clone();
+        let input_str = input.to_string();
+        let (mut tx, rx) = mpsc::channel(100);
+
+        task::spawn_blocking(move || {
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::ProcessStart)));
+
+            let backend_ref = &backend;
+
+            // Create context for embeddings
+            let ctx_params = LlamaContextParams::default()
+                .with_n_ctx(config.context_size.and_then(|s| NonZeroU32::new(s)))
+                .with_embeddings(true); // Enable embedding mode
+
+            let mut ctx = match model.new_context(backend_ref, ctx_params) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = futures::executor::block_on(
+                        tx.send(Err(anyhow!("Context creation failed: {}", e))),
+                    );
+                    return;
+                }
+            };
+
+            // Tokenize input
+            let tokens_list = match model.str_to_token(&input_str, AddBos::Always) {
+                Ok(t) => t,
+                Err(e) => {
+                    let _ = futures::executor::block_on(
+                        tx.send(Err(anyhow!("Tokenize failed: {}", e))),
+                    );
+                    return;
+                }
+            };
+
+            // Prepare batch
+            let mut batch = LlamaBatch::new(2048, 1);
+
+            // Add all tokens to batch (no need for logits in embedding mode)
+            for (i, token) in tokens_list.iter().enumerate() {
+                let _ = batch.add(*token, i as i32, &[0], false);
+            }
+
+            // Decode to get embeddings
+            if let Err(e) = ctx.decode(&mut batch) {
+                let _ = futures::executor::block_on(tx.send(Err(anyhow!("Decode failed: {}", e))));
+                return;
+            }
+
+            // Extract embeddings from the context
+            // The embeddings are typically available after decode
+            // Extract embeddings from the context
+            let embeddings = match ctx.embeddings_seq_ith(0) {
+                Ok(e) => e.to_vec(),
+                Err(e) => {
+                    let _ = futures::executor::block_on(
+                        tx.send(Err(anyhow!("Failed to get embeddings from context: {}", e))),
+                    );
+                    return;
+                }
+            };
+
+            let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Embedding(embeddings))));
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Complete)));
         });
 

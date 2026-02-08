@@ -7,19 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.3](https://github.com/tmzt/rusty-genius/compare/rusty-genius-stem-v0.1.2...rusty-genius-stem-v0.1.3) - 2026-02-05
+## [0.1.3](https://github.com/tmzt/rusty-genius/compare/ogenius-v0.1.2...ogenius-v0.1.3) - 2026-02-05
 
 ### Other
 
 - Commit changes
 - Commit ogenius changes
+- sync ogenius doc comments with README
 - Final quality fixes for clippy and redundant patterns
 - Commit ogenius CLI
-
-## [0.1.2](https://github.com/tmzt/rusty-genius/compare/rusty-genius-stem-v0.1.1...rusty-genius-stem-v0.1.2) - 2026-02-03
-
-### Other
-
-- (chore) update examples
-- Update documentation and examples
-- (chore) site: update badges

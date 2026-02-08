@@ -30,23 +30,15 @@ check_cmake() {
 # Verify cmake availability
 check_cmake || exit 1
 
-# Directive #2: Sandbox Isolation
-# Create a local temp directory to avoid sandbox restrictions on system /tmp
-export LOCAL_TEMP_DIR="$(pwd)/target/tmp"
-mkdir -p "$LOCAL_TEMP_DIR"
-# Force temp dir usage
-# Force temp dir usage
-export TMPDIR="$(pwd)/target/tmp"
-export TEMP="$(pwd)/target/tmp"
-export TMP="$(pwd)/target/tmp"
-# Use unique config dir to avoid stale locks
-# export GENIUS_HOME="$(pwd)/target/tmp/config_$(date +%s)"
+# Fix for permissions: Ensure TMPDIR is local and writable
+export TMPDIR="/tmp/rusty-genius-tmp"
+mkdir -p "$TMPDIR"
+export CARGO_INCREMENTAL=0
 
 # Prevent duplicate model downloads
-export GENIUS_HOME="$(pwd)/target/tmp/config"
-export GENIUS_CACHE="$(pwd)/target/tmp/cache"
+export GENIUS_HOME="/tmp/rusty-genius-tests"
+export GENIUS_CACHE="$GENIUS_HOME/cache"
 
-mkdir -p "$TMPDIR"
 mkdir -p "$GENIUS_HOME"
 mkdir -p "$GENIUS_CACHE"
 

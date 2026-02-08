@@ -1,3 +1,4 @@
+use crate::registry::ModelEntry;
 use crate::registry::ModelRegistry;
 use anyhow::Result;
 use futures::channel::mpsc;
@@ -48,6 +49,11 @@ impl AssetAuthority {
         })
     }
 
+    /// List all models in the registry.
+    pub fn list_models(&self) -> Vec<ModelEntry> {
+        self.registry.list_models()
+    }
+
     /// Download a model and return its local path.
     pub async fn ensure_model(&self, name: &str) -> Result<PathBuf> {
         let (tx, mut rx) = mpsc::channel(1);
@@ -61,7 +67,7 @@ impl AssetAuthority {
             }
         });
 
-        while let Some(_) = rx.next().await {}
+        while rx.next().await.is_some() {}
         handle.await
     }
 
@@ -71,8 +77,16 @@ impl AssetAuthority {
         let name = name.to_string();
 
         async_std::task::spawn(async move {
-            if let Ok(auth) = AssetAuthority::new() {
-                let _ = auth.ensure_model_internal(&name, tx, false).await;
+            let mut err_tx = tx.clone();
+            let result: Result<()> = async {
+                let auth = AssetAuthority::new()?;
+                auth.ensure_model_internal(&name, tx, false).await?;
+                Ok(())
+            }
+            .await;
+
+            if let Err(e) = result {
+                let _ = err_tx.send(AssetEvent::Error(e.to_string())).await;
             }
         });
 
@@ -87,11 +101,36 @@ impl AssetAuthority {
     ) -> Result<PathBuf> {
         let _ = tx.send(AssetEvent::Started(name.to_string())).await;
 
-        let spec = self.registry.resolve(name).ok_or_else(|| {
+        let spec = if let Some(s) = self.registry.resolve(name) {
+            s
+        } else if name.contains('/') {
+            // Heuristic: If it contains '/', treat as Repo/Repo-GGUF:filename:quant
+            // and try to parse it.
+            // For now, let's assume Repo/Repo/filename pattern if possible or default.
+            // But let's check if the user wanted a specific format.
+            // Actually, let's just allow downloading by registry name mainly.
+            // If it's a Repo, we might need more info.
+
+            let parts: Vec<&str> = name.split(':').collect();
+            if parts.len() >= 2 {
+                ModelSpec {
+                    repo: parts[0].to_string(),
+                    filename: parts[1].to_string(),
+                    quantization: parts.get(2).unwrap_or(&"Q4_K_M").to_string(),
+                }
+            } else {
+                let err = format!(
+                    "Model '{}' not found and invalid Repo/Repo:filename format",
+                    name
+                );
+                let _ = tx.try_send(AssetEvent::Error(err.clone()));
+                return Err(GeniusError::ManifestError(err).into());
+            }
+        } else {
             let err = format!("Model '{}' not found in registry", name);
             let _ = tx.try_send(AssetEvent::Error(err.clone()));
-            GeniusError::ManifestError(err)
-        })?;
+            return Err(GeniusError::ManifestError(err).into());
+        };
 
         let cache_dir = self.registry.get_cache_dir();
         fs::create_dir_all(&cache_dir)?;
@@ -110,6 +149,18 @@ impl AssetAuthority {
         self.download_file_with_events(&spec, &path, tx.clone())
             .await?;
 
+        // If it was a new model (resolved via heuristic), record it
+        if self.registry.resolve(name).is_none() {
+            let mut registry = ModelRegistry::new()?;
+            registry.record_model(crate::registry::ModelEntry {
+                name: name.to_string(),
+                repo: spec.repo.clone(),
+                filename: spec.filename.clone(),
+                quantization: spec.quantization.clone(),
+                purpose: crate::registry::ModelPurpose::Inference,
+            })?;
+        }
+
         let _ = tx
             .send(AssetEvent::Complete(path.display().to_string()))
             .await;
@@ -126,6 +177,12 @@ impl AssetAuthority {
             "https://huggingface.co/{}/resolve/main/{}",
             spec.repo, spec.filename
         );
+        let _ = sender
+            .clone()
+            .try_send(AssetEvent::Started(format!("Downloading from: {}", url)));
+        if !final_path.exists() {
+            println!("DEBUG: Downloading from URL: {}", url);
+        }
 
         let partial_path = final_path.with_extension("partial");
         let client = surf::Client::new().with(RedirectMiddleware::new(5));
@@ -162,8 +219,23 @@ impl AssetAuthority {
             }
         }
 
-        std::fs::rename(&partial_path, final_path)
-            .map_err(|e| anyhow::anyhow!("Failed to finalize model file: {}", e))?;
+        if !partial_path.exists() {
+            return Err(anyhow::anyhow!(
+                "Partial file missing before rename: {:?}",
+                partial_path
+            ));
+        }
+
+        if let Err(e) = std::fs::rename(&partial_path, final_path) {
+            eprintln!(
+                "Warning: rename {:?} -> {:?} failed ({}), falling back to copy...",
+                partial_path, final_path, e
+            );
+            std::fs::copy(&partial_path, final_path).map_err(|e| {
+                anyhow::anyhow!("Failed to finalize model file (copy fallback): {}", e)
+            })?;
+            let _ = std::fs::remove_file(&partial_path);
+        }
         Ok(())
     }
 }
