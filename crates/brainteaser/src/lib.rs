@@ -4,10 +4,10 @@ mod tests {
     use futures::channel::mpsc;
     use futures::sink::SinkExt;
     use futures::StreamExt;
-    use rusty_genius::Orchestrator;
     use rusty_genius_core::protocol::{
-        AssetEvent, BrainstemInput, BrainstemOutput, InferenceEvent, ThoughtEvent,
+        AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, InferenceEvent, ThoughtEvent,
     };
+    use rusty_genius_stem::Orchestrator;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
@@ -40,8 +40,6 @@ mod tests {
                         stack.push(path);
                     } else if let Some(ext) = path.extension() {
                         if ext == "md" {
-                            // Path structure: .../fixtures/{ORG}/{REPO}/{QUANT}/{TEST}.md
-                            // We need to verify we are deep enough relative to base_path
                             if let Ok(stripped) = path.strip_prefix(base_path) {
                                 let components: Vec<_> = stripped
                                     .components()
@@ -88,17 +86,13 @@ mod tests {
         let orchestrator_handle =
             async_std::task::spawn(async move { orchestrator.run(input_rx, output_tx).await });
 
-        // 3. Load Model (Generic for now)
         // 3. Load Model
         println!("Sending LoadModel command...");
-        // Use real model name if feature is on, or generic stub if not.
-        // But logic is cleaner if we just ask for "qwen-2.5-3b-instruct" and let stub ignore it or fail?
-        // Stub implementation ignores name in `load_model`.
-        // So we can always send the real name.
         input_tx
-            .send(BrainstemInput::LoadModel(
-                "qwen-2.5-3b-instruct".to_string(),
-            ))
+            .send(BrainstemInput {
+                id: None,
+                command: BrainstemCommand::LoadModel("qwen-2.5-3b-instruct".to_string()),
+            })
             .await?;
 
         // 4. Run Inference (Use first fixture if available)
@@ -112,23 +106,14 @@ mod tests {
         println!("Prompt: {}", prompt);
 
         // Send Inference Request
-        // Using Default config assuming it's available or we construct it.
-        // Need to check protocol.rs imports for InferenceConfig if not available.
-        // Wait, did I import InferenceConfig? No.
-        // I need to use `rusty_genius_core::manifest::InferenceConfig` or similar.
-        // Let's check imports at top of file.
-        // `use rusty_genius_core::protocol::{...}`
-        // `InferenceConfig` is in `manifest`.
-        // I will add import in next step if it fails, or just use `..Default::default()` structural construction if struct is pub.
-        // But `InferenceConfig` is likely a struct.
-        // I'll assume `Default::default()` works if it derives Default, or I need to import it.
-        // Let's just try Default::default() as before.
-
         input_tx
-            .send(BrainstemInput::Infer {
-                model: Some("qwen-2.5-3b-instruct".to_string()),
-                prompt: prompt.clone(),
-                config: Default::default(),
+            .send(BrainstemInput {
+                id: None,
+                command: BrainstemCommand::Infer {
+                    model: Some("qwen-2.5-3b-instruct".to_string()),
+                    prompt: prompt.clone(),
+                    config: Default::default(),
+                },
             })
             .await?;
 
@@ -138,7 +123,6 @@ mod tests {
 
         println!("Waiting for events...");
         loop {
-            // Increase timeout for real engine (downloading 2.5GB model takes time)
             let timeout_sec = if cfg!(feature = "real-engine") {
                 600
             } else {
@@ -148,35 +132,46 @@ mod tests {
                 async_std::future::timeout(Duration::from_secs(timeout_sec), output_rx.next())
                     .await;
             match msg {
-                Ok(Some(BrainstemOutput::Event(event))) => match event {
-                    InferenceEvent::ProcessStart => println!("Process Started"),
-                    InferenceEvent::Thought(t) => match t {
-                        ThoughtEvent::Start => println!("Thinking..."),
-                        ThoughtEvent::Delta(d) => thought_process.push_str(&d),
-                        ThoughtEvent::Stop => println!("Thought process: {}", thought_process),
+                Ok(Some(output)) => match output.body {
+                    BrainstemBody::Event(event) => match event {
+                        InferenceEvent::ProcessStart => println!("Process Started"),
+                        InferenceEvent::Thought(t) => match t {
+                            ThoughtEvent::Start => println!("Thinking..."),
+                            ThoughtEvent::Delta(d) => thought_process.push_str(&d),
+                            ThoughtEvent::Stop => println!("Thought process: {}", thought_process),
+                        },
+                        InferenceEvent::Content(c) => collected_output.push_str(&c),
+                        InferenceEvent::Complete => {
+                            println!("Inference Complete");
+                            break;
+                        }
+                        _ => {}
                     },
-                    InferenceEvent::Content(c) => collected_output.push_str(&c),
-                    InferenceEvent::Complete => {
-                        println!("Inference Complete");
-                        break;
+                    BrainstemBody::Asset(asset_event) => {
+                        println!("[Asset] Event: {:?}", asset_event);
+                        if let AssetEvent::Error(e) = asset_event {
+                            return Err(anyhow::anyhow!("Asset error: {}", e));
+                        }
+                    }
+                    BrainstemBody::Error(e) => {
+                        return Err(anyhow::anyhow!("Received error from brainstem: {}", e));
+                    }
+                    BrainstemBody::ModelList(_) => {
+                        // Ignored in test harness
                     }
                 },
-                Ok(Some(BrainstemOutput::Asset(asset_event))) => {
-                    println!("[Asset] Event: {:?}", asset_event);
-                    if let AssetEvent::Error(e) = asset_event {
-                        return Err(anyhow::anyhow!("Asset error: {}", e));
-                    }
-                }
-                Ok(Some(BrainstemOutput::Error(e))) => {
-                    return Err(anyhow::anyhow!("Received error from brainstem: {}", e));
-                }
                 Ok(None) => return Err(anyhow::anyhow!("Channel closed unexpectedly")),
                 Err(_) => return Err(anyhow::anyhow!("Timeout waiting for response")),
             }
         }
 
         // Cleanup
-        input_tx.send(BrainstemInput::Stop).await?;
+        input_tx
+            .send(BrainstemInput {
+                id: None,
+                command: BrainstemCommand::Stop,
+            })
+            .await?;
         let _ = orchestrator_handle.await?;
 
         println!("Collected Output: {}", collected_output);
@@ -189,7 +184,7 @@ mod tests {
             assert!(collected_output.contains(&prompt));
         }
 
-        // Assertions (for real mode - actual inference)
+        // Assertions (for real mode)
         #[cfg(feature = "real-engine")]
         {
             if collected_output.trim().is_empty() {

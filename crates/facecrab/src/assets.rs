@@ -1,3 +1,4 @@
+use crate::registry::ModelEntry;
 use crate::registry::ModelRegistry;
 use anyhow::Result;
 use futures::channel::mpsc;
@@ -48,6 +49,11 @@ impl AssetAuthority {
         })
     }
 
+    /// List all models in the registry.
+    pub fn list_models(&self) -> Vec<ModelEntry> {
+        self.registry.list_models()
+    }
+
     /// Download a model and return its local path.
     pub async fn ensure_model(&self, name: &str) -> Result<PathBuf> {
         let (tx, mut rx) = mpsc::channel(1);
@@ -71,8 +77,16 @@ impl AssetAuthority {
         let name = name.to_string();
 
         async_std::task::spawn(async move {
-            if let Ok(auth) = AssetAuthority::new() {
-                let _ = auth.ensure_model_internal(&name, tx, false).await;
+            let mut err_tx = tx.clone();
+            let result: Result<()> = async {
+                let auth = AssetAuthority::new()?;
+                auth.ensure_model_internal(&name, tx, false).await?;
+                Ok(())
+            }
+            .await;
+
+            if let Err(e) = result {
+                let _ = err_tx.send(AssetEvent::Error(e.to_string())).await;
             }
         });
 
@@ -143,6 +157,7 @@ impl AssetAuthority {
                 repo: spec.repo.clone(),
                 filename: spec.filename.clone(),
                 quantization: spec.quantization.clone(),
+                purpose: crate::registry::ModelPurpose::Inference,
             })?;
         }
 
@@ -162,6 +177,12 @@ impl AssetAuthority {
             "https://huggingface.co/{}/resolve/main/{}",
             spec.repo, spec.filename
         );
+        let _ = sender
+            .clone()
+            .try_send(AssetEvent::Started(format!("Downloading from: {}", url)));
+        if !final_path.exists() {
+            println!("DEBUG: Downloading from URL: {}", url);
+        }
 
         let partial_path = final_path.with_extension("partial");
         let client = surf::Client::new().with(RedirectMiddleware::new(5));
@@ -198,8 +219,23 @@ impl AssetAuthority {
             }
         }
 
-        std::fs::rename(&partial_path, final_path)
-            .map_err(|e| anyhow::anyhow!("Failed to finalize model file: {}", e))?;
+        if !partial_path.exists() {
+            return Err(anyhow::anyhow!(
+                "Partial file missing before rename: {:?}",
+                partial_path
+            ));
+        }
+
+        if let Err(e) = std::fs::rename(&partial_path, final_path) {
+            eprintln!(
+                "Warning: rename {:?} -> {:?} failed ({}), falling back to copy...",
+                partial_path, final_path, e
+            );
+            std::fs::copy(&partial_path, final_path).map_err(|e| {
+                anyhow::anyhow!("Failed to finalize model file (copy fallback): {}", e)
+            })?;
+            let _ = std::fs::remove_file(&partial_path);
+        }
         Ok(())
     }
 }

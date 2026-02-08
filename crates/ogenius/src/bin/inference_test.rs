@@ -1,10 +1,9 @@
 use anyhow::{anyhow, Result};
-use async_std::io::BufReader;
-use async_std::prelude::*;
-use async_std::process::{Child, Command, Stdio};
+
 use async_std::task;
 use serde::Deserialize;
 use serde_json::json;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[derive(Deserialize, Debug)]
@@ -13,12 +12,31 @@ struct ModelResponse {
     id: String,
     #[allow(dead_code)]
     object: String,
+    // #[allow(dead_code)]
+    // #[serde(required = false)]
+    // pub role: String,
+    #[allow(dead_code)]
     purpose: String,
 }
 
 #[derive(Deserialize, Debug)]
 struct ModelList {
     data: Vec<ModelResponse>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ChatChoice {
+    message: ChatMessage,
+}
+
+#[derive(Deserialize, Debug)]
+struct ChatMessage {
+    content: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct ChatCompletionResponse {
+    choices: Vec<ChatChoice>,
 }
 
 /// Helper to spawn ogenius server and return the base URL
@@ -31,38 +49,31 @@ async fn setup_test_server(binary_path: &str, port: u16) -> Result<(Child, Strin
         addr, binary_path
     );
 
+    // // Use system temp dir to avoid sandbox permission issues in target/tmp
+    // let genius_home = std::env::temp_dir().join("rusty-genius-test-home");
+    // if genius_home.exists() {
+    //     let _ = std::fs::remove_dir_all(&genius_home);
+    // }
+    // std::fs::create_dir_all(&genius_home)?;
+
+    // println!("🏠 using GENIUS_HOME={:?}", genius_home);
+
     // Launch ogenius serve
     let mut child = Command::new(binary_path)
         .args(["serve", "--addr", &addr, "--ws-addr", &ws_addr, "--no-open"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        // .env("GENIUS_HOME", genius_home)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()?;
 
-    // Spawn tasks to pipe output to our stdout/stderr with a prefix
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-
-    task::spawn(async move {
-        let mut reader = BufReader::new(stdout).lines();
-        while let Some(line) = reader.next().await {
-            if let Ok(l) = line {
-                println!("[SERVER OUT] {}", l);
-            }
-        }
-    });
-
-    task::spawn(async move {
-        let mut reader = BufReader::new(stderr).lines();
-        while let Some(line) = reader.next().await {
-            if let Ok(l) = line {
-                eprintln!("[SERVER ERR] {}", l);
-            }
-        }
-    });
+    // No need to spawn threads as we inherit stdio
 
     // Wait for server to start
     let base_url = format!("http://{}", addr);
-    for i in 0..50 {
+    for i in 0..300 {
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("Server process exited unexpectedly with status: {}", status);
+        }
         task::sleep(Duration::from_millis(200)).await;
         if surf::get(format!("{}/v1/models", base_url)).await.is_ok() {
             println!("✅ Server is up and responding on {}", base_url);
@@ -88,7 +99,7 @@ async fn main() -> Result<()> {
                 test_binary
             ));
         }
-        let (proc, base_url) = setup_test_server(&test_binary, 9999).await?;
+        let (proc, base_url) = setup_test_server(&test_binary, 10101).await?;
         (Some(proc), base_url)
     } else {
         let url = args
@@ -98,13 +109,13 @@ async fn main() -> Result<()> {
         (None, url.to_string())
     };
 
-    let input = args
+    let prompt = args
         .get(2)
         .map(|s| s.as_str())
-        .unwrap_or("The quick brown fox jumps over the lazy dog.");
+        .unwrap_or("Explain quantum computing in one sentence.");
 
-    println!("📡 Testing Embedding API at: {}", url);
-    println!("� Searching for embedding model...");
+    println!("📡 Testing Inference API at: {}", url);
+    println!("🔍 Searching for TinyLlama model...");
 
     // 1. List models
     let mut list_res = surf::get(format!("{}/v1/models", url))
@@ -123,34 +134,40 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to parse model list: {}", e))?;
 
-    // 2. Filter for embedding model
-    // Note: The API returns { id: "name", object: "model" }
-    // It does not currently return the purpose.
-    // We need to update Ogenius API to return the purpose or detailed info.
-    // FOR NOW: We will rely on the name still, until we update the API.
-    // Wait, the task is to use the purpose.
-    // I need to update `crates/ogenius/src/api.rs` to include `purpose` in `ModelResponse`.
-
-    let model_id = list_body
+    // 2. Filter for tiny-llama, ensuring purpose is Inference
+    let candidates: Vec<&ModelResponse> = list_body
         .data
         .iter()
-        .find(|m| m.purpose == "Embedding")
+        .filter(|m| m.purpose == "Inference")
+        .collect();
+
+    let model_id = candidates
+        .iter()
+        .find(|m| m.id.contains("tiny-llama"))
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|m| m.id.contains("tiny") || m.id.contains("llama"))
+        })
         .map(|m| m.id.clone())
         .ok_or_else(|| {
             anyhow!(
-                "No embedding model found in registry! Available: {:?}",
+                "No suitable tiny inference model found in registry! Available: {:?}",
                 list_body.data
             )
         })?;
 
     println!("✅ Found model: {}", model_id);
-    println!("📝 Input: \"{}\"", input);
+    println!("📝 Prompt: \"{}\"", prompt);
 
     let start = Instant::now();
-    let mut response = surf::post(format!("{}/v1/embeddings", url))
+    let mut response = surf::post(format!("{}/v1/chat/completions", url))
         .body_json(&json!({
             "model": model_id,
-            "input": input
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "stream": false
         }))
         .map_err(|e| anyhow!("Body error: {}", e))?
         .send()
@@ -160,25 +177,17 @@ async fn main() -> Result<()> {
     let duration = start.elapsed();
 
     if response.status().is_success() {
-        let body: serde_json::Value = response
+        let body: ChatCompletionResponse = response
             .body_json()
             .await
             .map_err(|e| anyhow!("Failed to parse JSON response: {}", e))?;
 
-        if let Some(data) = body["data"].as_array() {
-            if let Some(emb) = data.first() {
-                if let Some(vec) = emb["embedding"].as_array() {
-                    println!("✅ Success! Dimension: {}", vec.len());
-                    println!("⏱️ Latency: {:?}", duration);
-                    // println!("📊 First 5 values: {:?}", &vec[..5.min(vec.len())]);
-                } else {
-                    println!("❌ Error: 'embedding' field is missing or not an array");
-                }
-            } else {
-                println!("❌ Error: 'data' array is empty");
-            }
+        if let Some(choice) = body.choices.first() {
+            println!("✅ Success!");
+            println!("⏱️ Latency: {:?}", duration);
+            println!("🤖 Response: {}", choice.message.content);
         } else {
-            println!("❌ Error: Unexpected response format: {}", body);
+            println!("❌ Error: No choices in response");
         }
     } else {
         let status = response.status();

@@ -6,6 +6,8 @@ use rusty_genius_core::protocol::InferenceEvent;
 
 pub mod backend;
 
+pub use backend::create_engine;
+
 #[async_trait]
 pub trait Engine: Send + Sync {
     /// Load a model from a path
@@ -35,16 +37,4 @@ pub trait Engine: Send + Sync {
         input: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
-}
-
-pub async fn create_engine() -> Box<dyn Engine> {
-    #[cfg(feature = "real-engine")]
-    {
-        Box::new(backend::Brain::new())
-    }
-
-    #[cfg(not(feature = "real-engine"))]
-    {
-        Box::new(backend::Pinky::new())
-    }
 }

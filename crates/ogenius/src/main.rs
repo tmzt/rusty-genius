@@ -12,12 +12,15 @@ use colored::*;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rusty_genius_core::protocol::{
     AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, InferenceConfig,
     InferenceEvent,
 };
 use rusty_genius_stem::Orchestrator;
+use std::io::IsTerminal;
 use std::io::{self, Write};
+use std::process;
 use std::sync::Arc;
 use tide_websockets::{Message, WebSocket};
 
@@ -60,7 +63,12 @@ enum Commands {
         context_size: u32,
         /// Show thinking tokens
         #[arg(long, default_value = "true")]
+        /// Show thinking tokens
+        #[arg(long, default_value = "true")]
         show_thinking: bool,
+        /// Models to pre-load (download/verify) before starting
+        #[arg(long)]
+        load_models: Vec<String>,
     },
     /// Start interactive chat in CLI
     Chat {
@@ -96,14 +104,22 @@ enum Commands {
 
 #[async_std::main]
 async fn main() -> anyhow::Result<()> {
+    println!("DEBUG: ogenius main starting...");
+    let _ = io::stdout().flush();
+    // Install Ctrl-C handler for graceful shutdown (especially during downloads)
+    ctrlc::set_handler(move || {
+        println!("\n🛑 Received Ctrl-C, exiting...");
+        process::exit(130);
+    })?;
+
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Download { repo } => {
             println!("📥 Downloading {}", repo.cyan());
             let mut orchestrator = Orchestrator::new().await?;
-            let (mut input_tx, input_rx) = mpsc::channel(10);
-            let (output_tx, mut output_rx) = mpsc::channel(10);
+            let (mut input_tx, input_rx) = mpsc::channel(100);
+            let (output_tx, mut output_rx) = mpsc::channel(100);
 
             async_std::task::spawn(async move {
                 let _ = orchestrator.run(input_rx, output_tx).await;
@@ -151,8 +167,8 @@ async fn main() -> anyhow::Result<()> {
         } => {
             println!("💬 Starting chat with {}", model.cyan());
             let mut orchestrator = Orchestrator::new().await?;
-            let (mut input_tx, input_rx) = mpsc::channel(10);
-            let (output_tx, mut output_rx) = mpsc::channel(10);
+            let (mut input_tx, input_rx) = mpsc::channel(100);
+            let (output_tx, mut output_rx) = mpsc::channel(100);
 
             async_std::task::spawn(async move {
                 let _ = orchestrator.run(input_rx, output_tx).await;
@@ -245,8 +261,8 @@ async fn main() -> anyhow::Result<()> {
         } => {
             println!("🔢 Generating embeddings using {}", model.cyan());
             let mut orchestrator = Orchestrator::new().await?;
-            let (mut input_tx, input_rx) = mpsc::channel(10);
-            let (output_tx, mut output_rx) = mpsc::channel(10);
+            let (mut input_tx, input_rx) = mpsc::channel(100);
+            let (output_tx, mut output_rx) = mpsc::channel(100);
 
             async_std::task::spawn(async move {
                 let _ = orchestrator.run(input_rx, output_tx).await;
@@ -320,15 +336,116 @@ async fn main() -> anyhow::Result<()> {
             quant: _,
             context_size,
             show_thinking,
+            load_models,
         } => {
-            println!("🚀 Starting server at {}", addr.cyan());
-            println!("🔌 WebSocket endpoint at {}", ws_addr.cyan());
+            // 1. Parallel Model Loading
+            if !load_models.is_empty() {
+                println!("📦 Pre-loading {} models...", load_models.len());
+                let authority = facecrab::AssetAuthority::new()?;
+                let multi_progress = MultiProgress::new();
+                let is_tty = io::stdout().is_terminal();
 
+                if !is_tty {
+                    println!("Running in non-interactive mode. Progress bars disabled.");
+                    multi_progress.set_draw_target(ProgressDrawTarget::hidden());
+                }
+
+                let tasks: Vec<_> = load_models
+                    .iter()
+                    .map(|m| {
+                        let auth = &authority;
+                        let name = m.clone();
+                        let pb = multi_progress.add(ProgressBar::new(0));
+                        pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
+                            .unwrap()
+                            .progress_chars("#>-"));
+                        pb.set_message(format!("Waiting: {}", name));
+
+                        async move {
+                            let mut stream = auth.ensure_model_stream(&name);
+                            let mut last_path = None;
+                            let mut last_pct = 0;
+                            while let Some(event) = stream.next().await {
+                                match event {
+                                    AssetEvent::Started(_) => {
+                                        if is_tty {
+                                            pb.set_message(format!("Downloading: {}", name));
+                                        } else {
+                                            println!("Downloading: {}", name);
+                                        }
+                                    }
+                                    AssetEvent::Progress(current, total) => {
+                                        if is_tty {
+                                            pb.set_length(total);
+                                            pb.set_position(current);
+                                        } else if total > 0 {
+                                            let current_pct = (current * 100) / total;
+                                            if current_pct >= last_pct + 10 {
+                                                println!("Downloading: {} {}%", name, current_pct);
+                                                last_pct = current_pct;
+                                            }
+                                        }
+                                    }
+                                    AssetEvent::Complete(path) => {
+                                        if is_tty {
+                                            pb.finish_with_message(format!("✅ Ready: {}", name));
+                                        } else {
+                                            println!("✅ Ready: {}", name);
+                                        }
+                                        last_path = Some(std::path::PathBuf::from(path));
+                                    }
+                                    AssetEvent::Error(e) => {
+                                        if is_tty {
+                                            pb.abandon_with_message(format!("❌ Error: {}", e));
+                                        } else {
+                                            println!("❌ Error: {}", e);
+                                        }
+                                        return Err(anyhow::anyhow!("Failed to download {}: {}", name, e));
+                                    }
+                                }
+                            }
+                            if let Some(path) = last_path {
+                                Ok(path)
+                            } else {
+                                Err(anyhow::anyhow!("Stream ended without completion for {}", name))
+                            }
+                        }
+                    })
+                    .collect();
+
+                let results = futures::future::join_all(tasks).await;
+
+                // Clear multi_progress to ensure output below it prints clean
+                let _ = multi_progress.clear();
+
+                let mut failures = Vec::new();
+                for (i, res) in results.into_iter().enumerate() {
+                    match res {
+                        Ok(path) => {
+                            println!("✅ Ready: {} ({})", load_models[i].green(), path.display());
+                        }
+                        Err(e) => failures.push(format!("{}: {}", load_models[i], e)),
+                    }
+                }
+
+                if !failures.is_empty() {
+                    eprintln!("\n❌ Failed to load some models:");
+                    for f in failures {
+                        eprintln!("  - {}", f.red());
+                    }
+                    std::process::exit(1);
+                }
+                println!("✨ All models loaded. Starting server...\n");
+            }
+
+            println!("DEBUG: Initializing Orchestrator...");
+            let _ = io::stdout().flush();
             let mut orchestrator = Orchestrator::new().await?;
-            let (input_tx, input_rx) = mpsc::channel(100);
-            let (output_tx, mut output_rx) = mpsc::channel(100);
+            println!("DEBUG: Orchestrator initialized.");
+            let _ = io::stdout().flush();
+            let (input_tx, input_rx) = mpsc::channel(500);
+            let (output_tx, mut output_rx) = mpsc::channel(500);
 
-            // Shared senders for all active clients (WS and API)
             let broadcast_senders: Arc<Mutex<Vec<mpsc::Sender<BrainstemOutput>>>> =
                 Arc::new(Mutex::new(Vec::new()));
 
@@ -339,21 +456,26 @@ async fn main() -> anyhow::Result<()> {
             };
 
             async_std::task::spawn(async move {
-                let _ = orchestrator.run(input_rx, output_tx).await;
+                eprintln!("DEBUG: Orchestrator starting...");
+                if let Err(e) = orchestrator.run(input_rx, output_tx).await {
+                    eprintln!("❌ Orchestrator CRASHED: {}", e);
+                }
+                eprintln!("DEBUG: Orchestrator exited.");
             });
 
-            // Bridge orchestrator output to all broadcast senders
             let bridge_senders = broadcast_senders.clone();
             async_std::task::spawn(async move {
                 while let Some(msg) = output_rx.next().await {
                     let mut senders = bridge_senders.lock().await;
                     let mut to_remove = Vec::new();
                     for (i, sender) in senders.iter_mut().enumerate() {
-                        if sender.send(msg.clone()).await.is_err() {
-                            to_remove.push(i);
+                        // Use try_send to avoid blocking the whole bridge if one client is slow
+                        if let Err(e) = sender.try_send(msg.clone()) {
+                            if e.is_disconnected() {
+                                to_remove.push(i);
+                            }
                         }
                     }
-                    // Clean up closed senders
                     for i in to_remove.into_iter().rev() {
                         senders.remove(i);
                     }
@@ -367,15 +489,13 @@ async fn main() -> anyhow::Result<()> {
             };
 
             if let Some(m) = model {
-                println!("⏳ Pre-loading model {}...", m.cyan());
-                input_tx
+                let _ = input_tx
                     .clone()
                     .send(BrainstemInput {
                         id: None,
                         command: BrainstemCommand::LoadModel(m),
                     })
-                    .await?;
-                println!("✅ Model pre-load triggered!");
+                    .await;
             }
 
             let mut app = tide::with_state(state);
@@ -389,33 +509,32 @@ async fn main() -> anyhow::Result<()> {
             });
 
             app.at("/v1/models").get(list_models);
-            app.at("/v1/chat_completions").post(chat_completions);
+            app.at("/v1/chat/completions").post(chat_completions);
             app.at("/v1/embeddings").post(api::embeddings);
+            app.at("/v1/engine/reset").post(api::reset_engine);
             app.at("/v1/config").get(api::get_config);
 
-            // WS server with real streaming
             let input_tx_ws = input_tx.clone();
             let bc_senders = broadcast_senders.clone();
-            let _ws_server = async_std::task::spawn(async move {
+            let ws_addr_srv = ws_addr.clone();
+            async_std::task::spawn(async move {
                 let mut ws_app = tide::new();
                 ws_app.at("/").get(WebSocket::new(move |_req, mut stream| {
                     let mut input_tx = input_tx_ws.clone();
                     let bc_senders = bc_senders.clone();
                     let inference_config = inference_config.clone();
                     async move {
-                        // Create a channel for THIS client
-                        let (tx, mut rx) = mpsc::channel(100);
+                        let (tx, mut rx) = mpsc::channel(500);
                         {
                             let mut senders = bc_senders.lock().await;
                             senders.push(tx);
                         }
 
-                        // Spawn a task to forward events from our private channel to WS
-                        let stream_clone = stream.clone();
+                        let stream_write = stream.clone();
                         async_std::task::spawn(async move {
                             while let Some(event) = rx.next().await {
                                 if let Ok(json) = serde_json::to_string(&event) {
-                                    if stream_clone.send_string(json).await.is_err() {
+                                    if stream_write.send_string(json).await.is_err() {
                                         break;
                                     }
                                 }
@@ -441,20 +560,25 @@ async fn main() -> anyhow::Result<()> {
                         Ok(())
                     }
                 }));
-                let _ = ws_app.listen(ws_addr).await;
+                if let Err(e) = ws_app.listen(ws_addr_srv).await {
+                    eprintln!("❌ WebSocket Listen Error: {}", e);
+                }
             });
 
             if !no_open {
-                let url = if addr.starts_with(':') {
-                    format!("http://127.0.0.1{}", addr)
-                } else if addr.starts_with('0') {
-                    addr.replace("0.0.0.0", "127.0.0.1")
+                let url = if addr.contains(':') {
+                    if addr.starts_with(':') {
+                        format!("http://127.0.0.1{}", addr)
+                    } else {
+                        format!("http://{}", addr)
+                    }
                 } else {
-                    format!("http://{}", addr)
+                    format!("http://{}:8080", addr)
                 };
                 let _ = open_browser(&url).await;
             }
 
+            eprintln!("🚀 API Server listening on {}", addr.cyan());
             app.listen(addr).await?;
         }
     }

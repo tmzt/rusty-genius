@@ -36,7 +36,15 @@ pub enum BrainstemCommand {
         input: String,
         config: InferenceConfig,
     },
+    ListModels,
+    Reset,
     Stop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelDescriptor {
+    pub id: String,
+    pub purpose: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AssetEvent {
@@ -62,6 +70,8 @@ pub enum BrainstemBody {
     Event(InferenceEvent),
     /// Progress/status of asset management
     Asset(AssetEvent),
+    /// List of available models
+    ModelList(Vec<ModelDescriptor>),
     /// Catch-all for engine or orchestrator errors
     Error(String),
 }

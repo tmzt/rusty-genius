@@ -12,12 +12,24 @@ struct RegistryFile {
     models: Vec<ModelEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ModelPurpose {
+    Inference,
+    Embedding,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub name: String,
     pub repo: String,
     pub filename: String,
     pub quantization: String,
+    #[serde(default = "default_purpose")]
+    pub purpose: ModelPurpose,
+}
+
+fn default_purpose() -> ModelPurpose {
+    ModelPurpose::Inference
 }
 
 pub struct ModelRegistry {

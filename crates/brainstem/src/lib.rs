@@ -4,7 +4,7 @@ use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
 use rusty_genius_core::protocol::{
-    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput,
+    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ModelDescriptor,
 };
 use rusty_genius_cortex::{create_engine, Engine};
 use std::time::{Duration, Instant};
@@ -82,6 +82,11 @@ impl Orchestrator {
                 Some(msg) => {
                     self.last_activity = Instant::now();
                     let request_id = msg.id.clone().unwrap_or_else(|| "anon".to_string());
+                    eprintln!("DEBUG: [orchestrator] command: {:?}", msg.command);
+                    eprintln!(
+                        "DEBUG: [orchestrator] received command for [{}]: {:?}",
+                        request_id, msg.command
+                    );
 
                     match msg.command {
                         BrainstemCommand::LoadModel(name_or_path) => {
@@ -146,7 +151,7 @@ impl Orchestrator {
                                             continue;
                                         }
                                         self.last_model_name = Some(model_name);
-                                        println!(
+                                        eprintln!(
                                             "NOTICE: Model reload took {:?}.",
                                             start.elapsed()
                                         );
@@ -233,7 +238,7 @@ impl Orchestrator {
                                             continue;
                                         }
                                         self.last_model_name = Some(model_name);
-                                        println!(
+                                        eprintln!(
                                             "NOTICE: Model reload took {:?}.",
                                             start.elapsed()
                                         );
@@ -288,6 +293,43 @@ impl Orchestrator {
                                         })
                                         .await;
                                 }
+                            }
+                        }
+                        BrainstemCommand::ListModels => {
+                            let models = self
+                                .asset_authority
+                                .list_models()
+                                .into_iter()
+                                .map(|m| ModelDescriptor {
+                                    id: m.name,
+                                    purpose: format!("{:?}", m.purpose),
+                                })
+                                .collect();
+                            let _ = output_tx
+                                .send(BrainstemOutput {
+                                    id: Some(request_id),
+                                    body: BrainstemBody::ModelList(models),
+                                })
+                                .await;
+                        }
+                        BrainstemCommand::Reset => {
+                            if let Err(e) = self.engine.unload_model().await {
+                                let _ = output_tx
+                                    .send(BrainstemOutput {
+                                        id: Some(request_id),
+                                        body: BrainstemBody::Error(e.to_string()),
+                                    })
+                                    .await;
+                            } else {
+                                self.last_model_name = None;
+                                let _ = output_tx
+                                    .send(BrainstemOutput {
+                                        id: Some(request_id),
+                                        body: BrainstemBody::Event(
+                                            rusty_genius_core::protocol::InferenceEvent::Complete,
+                                        ),
+                                    })
+                                    .await;
                             }
                         }
                         BrainstemCommand::Stop => {

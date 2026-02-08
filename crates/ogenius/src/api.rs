@@ -7,12 +7,13 @@ use rusty_genius_core::protocol::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tide::{Request, Response, StatusCode};
+use tide::{Body, Request, Response, StatusCode};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ModelResponse {
     pub id: String,
     pub object: String,
+    pub purpose: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -23,7 +24,8 @@ pub struct ModelList {
 
 #[derive(Deserialize)]
 pub struct ChatMessage {
-    pub _role: String,
+    #[allow(dead_code)]
+    pub role: String,
     pub content: String,
 }
 
@@ -89,20 +91,78 @@ pub struct ApiState {
     pub ws_addr: String,
 }
 
-pub async fn list_models(_req: Request<ApiState>) -> tide::Result {
-    let models = vec![ModelResponse {
-        id: "any".to_string(),
-        object: "model".to_string(),
-    }];
-    Ok(serde_json::to_string(&ModelList {
+pub async fn list_models(req: Request<ApiState>) -> tide::Result {
+    eprintln!("DEBUG: list_models entry");
+    let state = req.state();
+
+    let request_id = format!(
+        "api-list-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+    );
+
+    let mut input_tx = state.input_tx.clone();
+    let (tx, mut rx) = mpsc::channel(100);
+
+    {
+        let mut senders = state.output_senders.lock().await;
+        senders.push(tx);
+    }
+
+    input_tx
+        .send(BrainstemInput {
+            id: Some(request_id.clone()),
+            command: BrainstemCommand::ListModels,
+        })
+        .await
+        .map_err(|e| tide::Error::from_str(500, e))?;
+
+    let timeout = std::time::Duration::from_secs(10);
+    let mut models_vec = Vec::new();
+
+    while let Ok(msg_opt) = async_std::future::timeout(timeout, rx.next()).await {
+        if let Some(output) = msg_opt {
+            if output.id.as_ref() == Some(&request_id) {
+                match output.body {
+                    BrainstemBody::ModelList(m) => {
+                        models_vec = m;
+                        break;
+                    }
+                    BrainstemBody::Error(e) => {
+                        return Err(tide::Error::from_str(500, e));
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    let models = models_vec
+        .into_iter()
+        .map(|desc| ModelResponse {
+            id: desc.id,
+            object: "model".to_string(),
+            purpose: desc.purpose,
+        })
+        .collect();
+
+    let resp = ModelList {
         object: "list".to_string(),
         data: models,
-    })?
-    .into())
+    };
+    Ok(Response::builder(StatusCode::Ok)
+        .body(Body::from_json(&resp)?)
+        .build())
 }
 
 pub async fn chat_completions(mut req: Request<ApiState>) -> tide::Result {
+    eprintln!("DEBUG: chat_completions entry");
     let body: ChatCompletionRequest = req.body_json().await?;
+    eprintln!("DEBUG: chat_completions body parsed");
     let state = req.state();
 
     let prompt = body
@@ -126,13 +186,11 @@ pub async fn chat_completions(mut req: Request<ApiState>) -> tide::Result {
     let mut input_tx = state.input_tx.clone();
     let (tx, mut rx) = mpsc::channel(100);
 
-    // Register our sender in the global broadcast list
     {
         let mut senders = state.output_senders.lock().await;
         senders.push(tx);
     }
 
-    eprintln!("DEBUG: Sending inference request...");
     input_tx
         .send(BrainstemInput {
             id: Some(request_id.clone()),
@@ -146,36 +204,31 @@ pub async fn chat_completions(mut req: Request<ApiState>) -> tide::Result {
         .map_err(|e| tide::Error::from_str(500, e))?;
 
     let mut full_content = String::new();
-
-    eprintln!("DEBUG: Waiting for brainstem output...");
     let timeout = std::time::Duration::from_secs(30);
-    let mut last_event = std::time::Instant::now();
 
-    while let Ok(msg) = async_std::future::timeout(timeout, rx.next()).await {
-        if let Some(output) = msg {
-            if output.id.as_ref() != Some(&request_id) {
-                continue;
-            }
-
-            eprintln!("DEBUG: Received output body type");
-            match output.body {
-                BrainstemBody::Event(InferenceEvent::Content(c)) => {
-                    full_content.push_str(&c);
-                    last_event = std::time::Instant::now();
+    while let Ok(msg_opt) = async_std::future::timeout(timeout, rx.next()).await {
+        eprintln!(
+            "DEBUG: chat_completions [{}] received result message: {:?}",
+            request_id, msg_opt
+        );
+        if let Some(output) = msg_opt {
+            if output.id.as_ref() == Some(&request_id) {
+                match output.body {
+                    BrainstemBody::Event(InferenceEvent::Content(c)) => {
+                        eprintln!("DEBUG: [{}] received Content", request_id);
+                        full_content.push_str(&c);
+                    }
+                    BrainstemBody::Event(InferenceEvent::Complete) => {
+                        eprintln!("DEBUG: [{}] received Complete", request_id);
+                        break;
+                    }
+                    BrainstemBody::Error(e) => {
+                        return Err(tide::Error::from_str(500, e));
+                    }
+                    _ => {}
                 }
-                BrainstemBody::Event(InferenceEvent::Complete) => {
-                    break;
-                }
-                BrainstemBody::Error(e) => {
-                    return Err(tide::Error::from_str(500, e));
-                }
-                _ => {}
             }
         } else {
-            break;
-        }
-
-        if last_event.elapsed() > timeout {
             break;
         }
     }
@@ -199,12 +252,14 @@ pub async fn chat_completions(mut req: Request<ApiState>) -> tide::Result {
     };
 
     Ok(Response::builder(StatusCode::Ok)
-        .body(serde_json::to_string(&response)?)
+        .body(Body::from_json(&response)?)
         .build())
 }
 
 pub async fn embeddings(mut req: Request<ApiState>) -> tide::Result {
+    eprintln!("DEBUG: embeddings entry");
     let body: EmbeddingRequest = req.body_json().await?;
+    eprintln!("DEBUG: embeddings body parsed");
     let state = req.state();
 
     let request_id = format!(
@@ -225,13 +280,12 @@ pub async fn embeddings(mut req: Request<ApiState>) -> tide::Result {
         senders.push(tx);
     }
 
-    eprintln!("DEBUG: Sending embedding request...");
     input_tx
         .send(BrainstemInput {
             id: Some(request_id.clone()),
             command: BrainstemCommand::Embed {
                 model: Some(body.model.clone()),
-                input: input.clone(),
+                input,
                 config: InferenceConfig::default(),
             },
         })
@@ -239,28 +293,29 @@ pub async fn embeddings(mut req: Request<ApiState>) -> tide::Result {
         .map_err(|e| tide::Error::from_str(500, e))?;
 
     let mut embedding_vec: Option<Vec<f32>> = None;
+    let timeout = std::time::Duration::from_secs(60);
 
-    eprintln!("DEBUG: Waiting for brainstem embedding...");
-    let timeout = std::time::Duration::from_secs(60); // Embeddings take longer to cold start
-
-    while let Ok(msg) = async_std::future::timeout(timeout, rx.next()).await {
-        if let Some(output) = msg {
-            if output.id.as_ref() != Some(&request_id) {
-                continue;
-            }
-
-            eprintln!("DEBUG: Received output body type");
-            match output.body {
-                BrainstemBody::Event(InferenceEvent::Embedding(emb)) => {
-                    embedding_vec = Some(emb);
+    while let Ok(msg_opt) = async_std::future::timeout(timeout, rx.next()).await {
+        eprintln!(
+            "DEBUG: embeddings [{}] received result message: {:?}",
+            request_id, msg_opt
+        );
+        if let Some(output) = msg_opt {
+            if output.id.as_ref() == Some(&request_id) {
+                match output.body {
+                    BrainstemBody::Event(InferenceEvent::Embedding(emb)) => {
+                        eprintln!("DEBUG: [{}] received Embedding", request_id);
+                        embedding_vec = Some(emb);
+                    }
+                    BrainstemBody::Event(InferenceEvent::Complete) => {
+                        eprintln!("DEBUG: [{}] received Complete", request_id);
+                        break;
+                    }
+                    BrainstemBody::Error(e) => {
+                        return Err(tide::Error::from_str(500, e));
+                    }
+                    _ => {}
                 }
-                BrainstemBody::Event(InferenceEvent::Complete) => {
-                    break;
-                }
-                BrainstemBody::Error(e) => {
-                    return Err(tide::Error::from_str(500, e));
-                }
-                _ => {}
             }
         } else {
             break;
@@ -277,17 +332,75 @@ pub async fn embeddings(mut req: Request<ApiState>) -> tide::Result {
             }],
             model: body.model,
         };
-        Ok(serde_json::to_string(&response)?.into())
+        Ok(Response::builder(StatusCode::Ok)
+            .body(Body::from_json(&response)?)
+            .build())
     } else {
-        Err(tide::Error::from_str(500, "No embedding in response"))
+        Ok(Response::builder(StatusCode::InternalServerError)
+            .body("No embedding in response")
+            .build())
     }
 }
 
 pub async fn get_config(req: Request<ApiState>) -> tide::Result {
     let state = req.state();
+    let response = ApiConfig {
+        ws_addr: state.ws_addr.clone(),
+    };
     Ok(Response::builder(StatusCode::Ok)
-        .body(serde_json::to_string(&ApiConfig {
-            ws_addr: state.ws_addr.clone(),
-        })?)
+        .body(Body::from_json(&response)?)
+        .build())
+}
+
+pub async fn reset_engine(req: Request<ApiState>) -> tide::Result {
+    eprintln!("DEBUG: reset_engine entry");
+    let state = req.state();
+
+    let request_id = format!(
+        "api-reset-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros()
+    );
+
+    let mut input_tx = state.input_tx.clone();
+    let (tx, mut rx) = mpsc::channel(100);
+
+    {
+        let mut senders = state.output_senders.lock().await;
+        senders.push(tx);
+    }
+
+    input_tx
+        .send(BrainstemInput {
+            id: Some(request_id.clone()),
+            command: BrainstemCommand::Reset,
+        })
+        .await
+        .map_err(|e| tide::Error::from_str(500, e))?;
+
+    let timeout = std::time::Duration::from_secs(10);
+    // Wait for acknowledgment
+    while let Ok(msg_opt) = async_std::future::timeout(timeout, rx.next()).await {
+        if let Some(output) = msg_opt {
+            if output.id.as_ref() == Some(&request_id) {
+                match output.body {
+                    BrainstemBody::Event(InferenceEvent::Complete) => {
+                        break;
+                    }
+                    BrainstemBody::Error(e) => {
+                        return Err(tide::Error::from_str(500, e));
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    Ok(Response::builder(StatusCode::Ok)
+        .body("Engine reset")
         .build())
 }
