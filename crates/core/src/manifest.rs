@@ -24,26 +24,35 @@ pub struct ModelSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InferenceConfig {
-    pub temperature: f32,
+pub struct EngineConfig {
+    // Model loading parameters
+    pub quant: Option<String>,
+    pub context_size: Option<u32>,
+    pub ttl_seconds: Option<i64>,
+
+    // Inference generation parameters
+    pub show_thinking: bool,
+    pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub top_k: Option<u32>,
     pub repetition_penalty: Option<f32>,
     pub max_tokens: Option<usize>,
-    pub context_size: Option<u32>,
-    pub show_thinking: bool,
 }
 
-impl Default for InferenceConfig {
+impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            temperature: 0.7,
+            // Model
+            quant: None,
+            context_size: Some(2048),
+            ttl_seconds: None,
+            // Inference
+            show_thinking: false,
+            temperature: Some(0.7),
             top_p: Some(0.9),
             top_k: Some(40),
             repetition_penalty: Some(1.1),
             max_tokens: None,
-            context_size: Some(2048),
-            show_thinking: true,
         }
     }
 }

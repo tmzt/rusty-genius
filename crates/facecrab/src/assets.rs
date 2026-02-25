@@ -5,8 +5,8 @@ use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
 use rusty_genius_core::manifest::ModelSpec;
-use rusty_genius_core::protocol::AssetEvent;
 use rusty_genius_core::GeniusError;
+use rusty_genius_thinkerv1 as thinkerv1;
 use std::fs;
 use std::path::PathBuf;
 
@@ -18,7 +18,8 @@ struct ProgressReader<R> {
     inner: R,
     current: u64,
     total: u64,
-    sender: mpsc::Sender<AssetEvent>,
+    sender: mpsc::Sender<thinkerv1::Response>,
+    id: String,
 }
 
 impl<R: futures::io::AsyncRead + Unpin> futures::io::AsyncRead for ProgressReader<R> {
@@ -31,9 +32,20 @@ impl<R: futures::io::AsyncRead + Unpin> futures::io::AsyncRead for ProgressReade
             std::task::Poll::Ready(Ok(n)) => {
                 if n > 0 {
                     self.current += n as u64;
-                    let current = self.current;
-                    let total = self.total;
-                    let _ = self.sender.try_send(AssetEvent::Progress(current, total));
+                    let progress = if self.total > 0 {
+                        Some(self.current as f32 / self.total as f32)
+                    } else {
+                        None
+                    };
+                    let id_clone = self.id.clone();
+                    let _ = self.sender.try_send(thinkerv1::Response::Status(
+                        thinkerv1::StatusResponse {
+                            id: id_clone,
+                            status: "downloading".to_string(),
+                            progress,
+                            message: None,
+                        },
+                    ));
                 }
                 std::task::Poll::Ready(Ok(n))
             }
@@ -49,30 +61,43 @@ impl AssetAuthority {
         })
     }
 
-    /// List all models in the registry.
     pub fn list_models(&self) -> Vec<ModelEntry> {
         self.registry.list_models()
     }
 
-    /// Download a model and return its local path.
-    pub async fn ensure_model(&self, name: &str) -> Result<PathBuf> {
-        let (tx, mut rx) = mpsc::channel(1);
-        let name = name.to_string();
-
-        let handle = async_std::task::spawn(async move {
-            if let Ok(auth) = AssetAuthority::new() {
-                auth.ensure_model_internal(&name, tx, true).await
-            } else {
-                Err(anyhow::anyhow!("Failed to create authority"))
+    pub async fn ensure_model(
+        &self,
+        id: String,
+        name: &str,
+        model_config: Option<thinkerv1::ModelConfig>,
+    ) -> Result<PathBuf> {
+        let mut stream = self.ensure_model_stream(id, name, model_config);
+        let mut final_path = None;
+        while let Some(response) = stream.next().await {
+            if let thinkerv1::Response::Status(status) = response {
+                if status.status == "ready" {
+                    final_path = status.message;
+                    break;
+                }
+                if status.status == "error" {
+                    return Err(anyhow::anyhow!(
+                        "Failed to ensure model: {}",
+                        status.message.unwrap_or_default()
+                    ));
+                }
             }
-        });
-
-        while rx.next().await.is_some() {}
-        handle.await
+        }
+        final_path
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("Model ensure stream ended without a ready signal."))
     }
 
-    /// Download a model and return a stream of [AssetEvent]s.
-    pub fn ensure_model_stream(&self, name: &str) -> mpsc::Receiver<AssetEvent> {
+    pub fn ensure_model_stream(
+        &self,
+        id: String,
+        name: &str,
+        model_config: Option<thinkerv1::ModelConfig>,
+    ) -> mpsc::Receiver<thinkerv1::Response> {
         let (tx, rx) = mpsc::channel(100);
         let name = name.to_string();
 
@@ -80,13 +105,20 @@ impl AssetAuthority {
             let mut err_tx = tx.clone();
             let result: Result<()> = async {
                 let auth = AssetAuthority::new()?;
-                auth.ensure_model_internal(&name, tx, false).await?;
+                auth.ensure_model_internal(id.clone(), &name, model_config, tx, false).await?;
                 Ok(())
             }
             .await;
 
             if let Err(e) = result {
-                let _ = err_tx.send(AssetEvent::Error(e.to_string())).await;
+                let _ = err_tx
+                    .send(thinkerv1::Response::Status(thinkerv1::StatusResponse {
+                        id,
+                        status: "error".to_string(),
+                        progress: None,
+                        message: Some(e.to_string()),
+                    }))
+                    .await;
             }
         });
 
@@ -95,42 +127,38 @@ impl AssetAuthority {
 
     async fn ensure_model_internal(
         &self,
+        id: String,
         name: &str,
-        mut tx: mpsc::Sender<AssetEvent>,
-        silent: bool,
+        model_config: Option<thinkerv1::ModelConfig>,
+        mut tx: mpsc::Sender<thinkerv1::Response>,
+        _silent: bool,
     ) -> Result<PathBuf> {
-        let _ = tx.send(AssetEvent::Started(name.to_string())).await;
+        let _ = tx
+            .send(thinkerv1::Response::Status(thinkerv1::StatusResponse {
+                id: id.clone(),
+                status: "resolving".to_string(),
+                progress: None,
+                message: Some(name.to_string()),
+            }))
+            .await;
 
-        let spec = if let Some(s) = self.registry.resolve(name) {
+        let mut spec = if let Some(s) = self.registry.resolve(name) {
             s
-        } else if name.contains('/') {
-            // Heuristic: If it contains '/', treat as Repo/Repo-GGUF:filename:quant
-            // and try to parse it.
-            // For now, let's assume Repo/Repo/filename pattern if possible or default.
-            // But let's check if the user wanted a specific format.
-            // Actually, let's just allow downloading by registry name mainly.
-            // If it's a Repo, we might need more info.
-
-            let parts: Vec<&str> = name.split(':').collect();
-            if parts.len() >= 2 {
-                ModelSpec {
-                    repo: parts[0].to_string(),
-                    filename: parts[1].to_string(),
-                    quantization: parts.get(2).unwrap_or(&"Q4_K_M").to_string(),
-                }
-            } else {
-                let err = format!(
-                    "Model '{}' not found and invalid Repo/Repo:filename format",
-                    name
-                );
-                let _ = tx.try_send(AssetEvent::Error(err.clone()));
-                return Err(GeniusError::ManifestError(err).into());
-            }
         } else {
-            let err = format!("Model '{}' not found in registry", name);
-            let _ = tx.try_send(AssetEvent::Error(err.clone()));
-            return Err(GeniusError::ManifestError(err).into());
+            // If not in registry and not a HuggingFace ID with '/', assume a default repo
+            // and treat the name as the filename and a default quantization.
+            ModelSpec {
+                repo: "ggml-org/models".to_string(), // Default HuggingFace Org/Repo
+                filename: format!("{}.gguf", name),
+                quantization: "Q4_K_M".to_string(),
+            }
         };
+
+        if let Some(config) = &model_config {
+            if let Some(quant) = &config.quant {
+                spec.quantization = quant.clone();
+            }
+        }
 
         let cache_dir = self.registry.get_cache_dir();
         fs::create_dir_all(&cache_dir)?;
@@ -138,63 +166,85 @@ impl AssetAuthority {
         let path = cache_dir.join(&spec.filename);
         if path.exists() {
             let _ = tx
-                .send(AssetEvent::Complete(path.display().to_string()))
+                .send(thinkerv1::Response::Status(thinkerv1::StatusResponse {
+                    id,
+                    status: "ready".to_string(),
+                    progress: None,
+                    message: Some(path.display().to_string()),
+                }))
                 .await;
             return Ok(path);
         }
 
-        if !silent {
-            println!("Downloading {} from {}...", spec.filename, spec.repo);
-        }
-        self.download_file_with_events(&spec, &path, tx.clone())
+        self.download_file_with_events(id.clone(), &spec, &path, tx.clone())
             .await?;
-
-        // If it was a new model (resolved via heuristic), record it
-        if self.registry.resolve(name).is_none() {
-            let mut registry = ModelRegistry::new()?;
-            registry.record_model(crate::registry::ModelEntry {
-                name: name.to_string(),
-                repo: spec.repo.clone(),
-                filename: spec.filename.clone(),
-                quantization: spec.quantization.clone(),
-                purpose: crate::registry::ModelPurpose::Inference,
-            })?;
-        }
-
+        
         let _ = tx
-            .send(AssetEvent::Complete(path.display().to_string()))
+            .send(thinkerv1::Response::Status(thinkerv1::StatusResponse {
+                id,
+                status: "ready".to_string(),
+                progress: None,
+                message: Some(path.display().to_string()),
+            }))
             .await;
+
         Ok(path)
     }
 
     async fn download_file_with_events(
         &self,
+        id: String,
         spec: &ModelSpec,
         final_path: &PathBuf,
-        sender: mpsc::Sender<AssetEvent>,
+        sender: mpsc::Sender<thinkerv1::Response>,
     ) -> Result<()> {
         let url = format!(
             "https://huggingface.co/{}/resolve/main/{}",
             spec.repo, spec.filename
         );
-        let _ = sender
-            .clone()
-            .try_send(AssetEvent::Started(format!("Downloading from: {}", url)));
-        if !final_path.exists() {
-            println!("DEBUG: Downloading from URL: {}", url);
-        }
+        let _ = sender.clone().try_send(thinkerv1::Response::Status(
+            thinkerv1::StatusResponse {
+                id: id.clone(),
+                status: "downloading".to_string(),
+                progress: Some(0.0),
+                message: Some(url.clone()),
+            },
+        ));
 
         let partial_path = final_path.with_extension("partial");
-        let client = surf::Client::new().with(RedirectMiddleware::new(5));
-        let response = client
-            .get(&url)
-            .await
-            .map_err(|e| anyhow::anyhow!("Surf request failed: {}", e))?;
+        
+        let mut current_url = url; // Make url mutable for redirects
+        let mut redirect_count = 0;
+        const MAX_REDIRECTS: u8 = 5; // A reasonable limit for redirects
 
-        let status = response.status();
-        if !status.is_success() {
-            return Err(anyhow::anyhow!("Download failed with status: {}", status));
-        }
+        let response = loop {
+            let client = surf::Client::new();
+            let res = client.get(&current_url).await.map_err(|e| anyhow::anyhow!("Surf request failed: {}", e))?;
+            
+            let status = res.status();
+            if status.is_success() {
+                break res; // Successful, exit loop with response
+            } else if status.is_redirection() {
+                redirect_count += 1;
+                if redirect_count > MAX_REDIRECTS {
+                    return Err(anyhow::anyhow!("Too many redirects ({}) for URL: {}", MAX_REDIRECTS, current_url));
+                }
+
+                let location_header = res.header("Location")
+                                            .map(|h| h.last().as_str())
+                                            .ok_or_else(|| anyhow::anyhow!("Redirect without Location header for URL: {}", current_url))?;
+                
+                // Update current_url for the next iteration
+                current_url = location_header.to_string();
+                eprintln!("DEBUG: Redirecting to: {} (attempt {}/{})", current_url, redirect_count, MAX_REDIRECTS);
+                // Continue loop
+            } else {
+                // Other non-successful status
+                let location_header = res.header("Location").map(|h| h.last().as_str()).unwrap_or("N/A");
+                eprintln!("DEBUG: Download failed for URL: {} with status: {}. Location header: {}", current_url, status, location_header);
+                return Err(anyhow::anyhow!("Download failed with status: {}", status));
+            }
+        };
 
         let total_size = response
             .header("Content-Length")
@@ -206,117 +256,17 @@ impl AssetAuthority {
             current: 0,
             total: total_size,
             sender,
+            id,
         };
 
-        {
-            let std_file = std::fs::File::create(&partial_path)
-                .map_err(|e| anyhow::anyhow!("Failed to create partial file: {}", e))?;
-            let mut file: async_std::fs::File = std_file.into();
-
-            if let Err(e) = futures::io::copy(&mut reader, &mut file).await {
-                let _ = std::fs::remove_file(&partial_path);
-                return Err(anyhow::anyhow!("Streaming failed: {}", e));
-            }
-        }
-
-        if !partial_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Partial file missing before rename: {:?}",
-                partial_path
-            ));
-        }
-
-        if let Err(e) = std::fs::rename(&partial_path, final_path) {
-            eprintln!(
-                "Warning: rename {:?} -> {:?} failed ({}), falling back to copy...",
-                partial_path, final_path, e
-            );
-            std::fs::copy(&partial_path, final_path).map_err(|e| {
-                anyhow::anyhow!("Failed to finalize model file (copy fallback): {}", e)
-            })?;
-            let _ = std::fs::remove_file(&partial_path);
-        }
+        let mut file = async_std::fs::File::create(&partial_path).await?;
+        futures::io::copy(&mut reader, &mut file).await?;
+        
+        std::fs::rename(&partial_path, final_path)?;
         Ok(())
     }
 }
 
-struct RedirectMiddleware {
-    max_attempts: u8,
-}
-
-impl RedirectMiddleware {
-    pub fn new(max_attempts: u8) -> Self {
-        Self { max_attempts }
-    }
-}
-
-#[surf::utils::async_trait]
-impl surf::middleware::Middleware for RedirectMiddleware {
-    async fn handle(
-        &self,
-        req: surf::Request,
-        client: surf::Client,
-        next: surf::middleware::Next<'_>,
-    ) -> surf::Result<surf::Response> {
-        let mut attempts = 0;
-        let mut current_req = req;
-
-        loop {
-            // Check attempts
-            if attempts > self.max_attempts {
-                return Err(surf::Error::from_str(
-                    surf::StatusCode::LoopDetected,
-                    "Too many redirects",
-                ));
-            }
-
-            // Clone req for the attempt (body might be an issue if not reusable, but for GET it's fine)
-            // surf::Request cloning is usually cheap (Arc-ish for body?).
-            // Wait, Request isn't trivially cloneable if body is a naive stream.
-            // But `current_req.clone()` works in surf.
-            let req_clone = current_req.clone();
-
-            let response = next.run(req_clone, client.clone()).await?;
-
-            if response.status().is_redirection() {
-                if let Some(location) = response.header("Location") {
-                    let loc_str = location.last().as_str().to_string();
-                    // Update URL
-                    // Use Url parsing to handle relative redirects?
-                    // For HF, usually absolute.
-                    // I will assume absolute or handle simple parse.
-
-                    let new_url = match surf::Url::parse(&loc_str) {
-                        Ok(u) => u,
-                        Err(_) => {
-                            // Try joining with base?
-                            let base = current_req.url();
-                            match base.join(&loc_str) {
-                                Ok(u) => u,
-                                Err(_) => {
-                                    return Err(surf::Error::from_str(
-                                        surf::StatusCode::BadGateway,
-                                        "Invalid redirect location",
-                                    ))
-                                }
-                            }
-                        }
-                    };
-
-                    current_req = surf::Request::new(current_req.method(), new_url);
-                    // Copy headers? usually yes.
-                    // For now, new request is clean. simple GET.
-                    // HF auth headers not needed for public models, but if they were, we'd copy.
-
-                    attempts += 1;
-                    continue;
-                }
-            }
-
-            return Ok(response);
-        }
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,14 +275,9 @@ mod tests {
     #[async_std::test]
     async fn test_ensure_model_tiny() {
         let authority = AssetAuthority::new().unwrap();
-        // Use a temp dir for testing if possible, but for now we'll just test the resolve logic
-        // and assume connectivity is allowed in this environment.
         let name = "tiny-model";
-        let res = authority.ensure_model(name).await;
-        assert!(
-            res.is_ok(),
-            "Should resolve and download (or find) tiny-model"
-        );
+        let res = authority.ensure_model("test-id-1".to_string(), name, None).await;
+        assert!(res.is_ok(), "Should resolve and download (or find) tiny-model");
         let path = res.unwrap();
         assert!(path.exists());
     }
@@ -342,26 +287,21 @@ mod tests {
         let authority = AssetAuthority::new().unwrap();
         let name = "tiny-model";
 
-        let mut rx = authority.ensure_model_stream(name);
-        let mut saw_started = false;
-        let mut saw_complete = false;
+        let mut rx = authority.ensure_model_stream("test-id-2".to_string(), name, None);
+        let mut saw_ready = false;
 
-        while let Some(event) = rx.next().await {
-            match event {
-                AssetEvent::Started(_) => saw_started = true,
-                AssetEvent::Complete(p) => {
-                    saw_complete = true;
-                    assert!(
-                        std::path::Path::new(&p).exists(),
-                        "Complete path must exist"
-                    );
-                }
-                AssetEvent::Error(e) => panic!("Download error: {}", e),
-                _ => {}
+        while let Some(response) = rx.next().await {
+            if let thinkerv1::Response::Status(status) = response {
+                 if status.status == "ready" {
+                    saw_ready = true;
+                    assert!(status.message.is_some());
+                    assert!(std::path::Path::new(&status.message.clone().unwrap()).exists());
+                 }
+                 if status.status == "error" {
+                    panic!("Download error: {}", status.message.unwrap_or_default());
+                 }
             }
         }
-
-        assert!(saw_started, "Should have received Started event");
-        assert!(saw_complete, "Should have received Complete event");
+        assert!(saw_ready, "Should have received Ready status");
     }
 }

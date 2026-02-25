@@ -18,6 +18,15 @@ pub enum ModelPurpose {
     Embedding,
 }
 
+impl ToString for ModelPurpose {
+    fn to_string(&self) -> String {
+        match self {
+            ModelPurpose::Inference => "Inference".to_string(),
+            ModelPurpose::Embedding => "Embedding".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub name: String,

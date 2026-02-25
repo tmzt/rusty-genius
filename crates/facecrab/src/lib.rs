@@ -28,7 +28,7 @@
 //!
 //!     // Resolves the name in the local registry or HuggingFace path.
 //!     // Downloads the model if not already cached.
-//!     let path = authority.ensure_model("qwen-2.5-3b-instruct").await?;
+//!     let path = authority.ensure_model("my-model-request".to_string(), "qwen-2.5-3b-instruct", None).await?;
 //!
 //!     println!("Model available at: {:?}", path);
 //!     Ok(())
@@ -40,24 +40,29 @@
 //! If you need to show a progress bar or handle download lifecycle events, use the streaming API.
 //!
 //! ```no_run
-//! use facecrab::AssetAuthority;
-//! use rusty_genius_core::protocol::AssetEvent;
+//! use facecrab::{AssetAuthority};
+//! use rusty_genius_thinkerv1::{Response, StatusResponse};
 //! use futures::StreamExt;
 //!
 //! #[async_std::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let authority = AssetAuthority::new()?;
-//!     let mut events = authority.ensure_model_stream("tiny-model");
+//!     // The stream now requires an ID for the events.
+//!     let request_id = "my_download_request".to_string();
+//!     let mut events = authority.ensure_model_stream(request_id, "tiny-model", None);
 //!
-//!     while let Some(event) = events.next().await {
-//!         match event {
-//!             AssetEvent::Started(name) => println!("Starting download: {}", name),
-//!             AssetEvent::Progress(current, total) => {
-//!                 let pct = (current as f64 / total as f64) * 100.0;
-//!                 print!("\rProgress: {:.2}% ({}/{})", pct, current, total);
+//!     while let Some(response) = events.next().await {
+//!         if let Response::Status(status) = response {
+//!             match status.status.as_str() {
+//!                 "downloading" => {
+//!                     if let Some(progress) = status.progress {
+//!                         print!("\rProgress: {:.2}%", progress * 100.0);
+//!                     }
+//!                 },
+//!                 "ready" => println!("\nModel ready!"),
+//!                 "error" => eprintln!("\nError: {}", status.message.unwrap_or_default()),
+//!                 _ => println!("\nStatus: {}", status.status),
 //!             }
-//!             AssetEvent::Complete(path) => println!("\nModel ready at: {}", path),
-//!             AssetEvent::Error(err) => eprintln!("Error: {}", err),
 //!         }
 //!     }
 //!

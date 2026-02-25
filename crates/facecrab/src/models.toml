@@ -27,9 +27,9 @@ purpose = "Inference"
 
 [[models]]
 name = "tiny-model"
-repo = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
-filename = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-quantization = "Q4_K_M"
+repo = "tensorblock/tiny-random-llama-GGUF"
+filename = "tiny-random-llama-Q3_K_M.gguf"
+quantization = "Q3_K_M"
 purpose = "Inference"
 
 [[models]]

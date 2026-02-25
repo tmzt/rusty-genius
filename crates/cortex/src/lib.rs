@@ -1,8 +1,8 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::channel::mpsc;
-use rusty_genius_core::manifest::InferenceConfig;
-use rusty_genius_core::protocol::InferenceEvent;
+use rusty_genius_core::manifest::EngineConfig;
+use rusty_genius_thinkerv1 as thinkerv1;
 
 pub mod backend;
 
@@ -23,18 +23,20 @@ pub trait Engine: Send + Sync {
     fn default_model(&self) -> String;
 
     /// Run inference
-    /// Returns a channel of InferenceEvents
+    /// Returns a channel of thinkerv1::Response (Event type)
     async fn infer(
         &mut self,
+        id: String, // New parameter
         prompt: &str,
-        config: InferenceConfig,
-    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
+        config: EngineConfig,
+    ) -> Result<mpsc::Receiver<Result<thinkerv1::Response>>>;
 
     /// Generate embeddings
-    /// Returns a channel of InferenceEvents (will emit Embedding event)
+    /// Returns a channel of thinkerv1::Response (Event type)
     async fn embed(
         &mut self,
+        id: String, // New parameter
         input: &str,
-        config: InferenceConfig,
-    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
+        config: EngineConfig,
+    ) -> Result<mpsc::Receiver<Result<thinkerv1::Response>>>;
 }
