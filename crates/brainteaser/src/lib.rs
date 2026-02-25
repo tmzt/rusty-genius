@@ -1,13 +1,9 @@
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use futures::channel::mpsc;
-    use futures::sink::SinkExt;
     use futures::StreamExt;
-    use rusty_genius_core::protocol::{
-        AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, InferenceEvent, ThoughtEvent,
-    };
-    use rusty_genius_stem::Orchestrator;
+    use rusty_genius::Genius;
+    use rusty_genius_thinkerv1::{EventResponse, ModelConfig, Response, InferenceConfig};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
@@ -15,9 +11,9 @@ mod tests {
     #[derive(Debug)]
     struct Fixture {
         path: PathBuf,
-        org: String,
-        repo: String,
-        quant: String,
+        // org: String, // Removed
+        // repo: String, // Removed
+        // quant: String, // Removed
         test_name: String,
     }
 
@@ -30,36 +26,27 @@ mod tests {
             );
             return fixtures;
         }
-
-        let mut stack = vec![base_path.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            if let Ok(entries) = fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        stack.push(path);
-                    } else if let Some(ext) = path.extension() {
-                        if ext == "md" {
-                            if let Ok(stripped) = path.strip_prefix(base_path) {
-                                let components: Vec<_> = stripped
-                                    .components()
-                                    .map(|c| c.as_os_str().to_string_lossy().to_string())
-                                    .collect();
-                                if components.len() == 4 {
-                                    fixtures.push(Fixture {
-                                        path: path.clone(),
-                                        org: components[0].clone(),
-                                        repo: components[1].clone(),
-                                        quant: components[2].clone(),
-                                        test_name: path
-                                            .file_stem()
-                                            .unwrap()
-                                            .to_string_lossy()
-                                            .to_string(),
-                                    });
-                                }
-                            }
-                        }
+        for entry in walkdir::WalkDir::new(base_path) {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+                 if let Ok(stripped) = path.strip_prefix(base_path) {
+                    let components: Vec<_> = stripped
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().to_string())
+                        .collect();
+                    if components.len() == 4 {
+                        fixtures.push(Fixture {
+                            path: path.to_path_buf(),
+                            test_name: path
+                                .file_stem()
+                                .unwrap()
+                                .to_string_lossy()
+                                .to_string(),
+                        });
                     }
                 }
             }
@@ -72,30 +59,44 @@ mod tests {
     async fn test_inference_flow() -> Result<()> {
         println!("Starting test_inference_flow...");
 
-        // 1. Scan for fixtures
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
         let fixture_root = PathBuf::from(manifest_dir).join("fixtures");
         let fixtures = scan_fixtures(&fixture_root);
         println!("Found {} fixtures.", fixtures.len());
 
-        // 2. Setup Orchestrator
-        let mut orchestrator = Orchestrator::new().await?;
-        let (mut input_tx, input_rx) = mpsc::channel(100);
-        let (output_tx, mut output_rx) = mpsc::channel(100);
+        let mut genius = Genius::new(Some(60)).await?; // Short TTL for testing
 
-        let orchestrator_handle =
-            async_std::task::spawn(async move { orchestrator.run(input_rx, output_tx).await });
+        // 1. Load Model
+        println!("Ensuring model is loaded...");
+        let model_name = "tiny-random-llama-gguf"; // A model name that should be in the registry or resolve
+        let model_config = Some(ModelConfig {
+            quant: Some("Q4_K_M".to_string()),
+            context_size: Some(1024),
+            ttl_seconds: Some(-1), // Keep alive for the test duration
+        });
 
-        // 3. Load Model
-        println!("Sending LoadModel command...");
-        input_tx
-            .send(BrainstemInput {
-                id: None,
-                command: BrainstemCommand::LoadModel("qwen-2.5-3b-instruct".to_string()),
-            })
+        let mut ensure_stream = genius
+            .ensure_model_stream(model_name.to_string(), true, model_config)
             .await?;
+        
+        loop {
+            match ensure_stream.next().await {
+                Some(Response::Status(status)) => {
+                    println!("[Client] Model Status: {:?}", status);
+                    if status.status == "ready" {
+                        break;
+                    }
+                    if status.status == "error" {
+                        return Err(anyhow::anyhow!("Failed to load model: {}", status.message.unwrap_or_default()));
+                    }
+                }
+                Some(_) => {}, // Ignore other events
+                None => return Err(anyhow::anyhow!("Ensure model stream ended unexpectedly.")),
+            }
+        }
+        println!("Model is ready.");
 
-        // 4. Run Inference (Use first fixture if available)
+        // 2. Run Inference
         let prompt = if let Some(fixture) = fixtures.first() {
             println!("Running fixture: {}", fixture.test_name);
             fs::read_to_string(&fixture.path)?
@@ -104,79 +105,51 @@ mod tests {
             "Tell me a joke about Rust".to_string()
         };
         println!("Prompt: {}", prompt);
+        
+        let inference_config = Some(InferenceConfig {
+            show_thinking: true,
+            ..Default::default()
+        });
 
-        // Send Inference Request
-        input_tx
-            .send(BrainstemInput {
-                id: None,
-                command: BrainstemCommand::Infer {
-                    model: Some("qwen-2.5-3b-instruct".to_string()),
-                    prompt: prompt.clone(),
-                    config: Default::default(),
-                },
-            })
-            .await?;
+        let mut infer_stream = genius.infer_stream(prompt.clone(), inference_config).await?;
 
-        // 5. Collect Output
         let mut collected_output = String::new();
         let mut thought_process = String::new();
 
-        println!("Waiting for events...");
+        println!("Waiting for inference events...");
+        let timeout_sec = if cfg!(feature = "real-engine") { 600 } else { 5 };
+
         loop {
-            let timeout_sec = if cfg!(feature = "real-engine") {
-                600
-            } else {
-                5
-            };
-            let msg =
-                async_std::future::timeout(Duration::from_secs(timeout_sec), output_rx.next())
-                    .await;
+            let msg = async_std::future::timeout(Duration::from_secs(timeout_sec), infer_stream.next()).await;
             match msg {
-                Ok(Some(output)) => match output.body {
-                    BrainstemBody::Event(event) => match event {
-                        InferenceEvent::ProcessStart => println!("Process Started"),
-                        InferenceEvent::Thought(t) => match t {
-                            ThoughtEvent::Start => println!("Thinking..."),
-                            ThoughtEvent::Delta(d) => thought_process.push_str(&d),
-                            ThoughtEvent::Stop => println!("Thought process: {}", thought_process),
-                        },
-                        InferenceEvent::Content(c) => collected_output.push_str(&c),
-                        InferenceEvent::Complete => {
-                            println!("Inference Complete");
-                            break;
+                Ok(Some(response)) => {
+                    if let Response::Event(event) = response {
+                        match event {
+                            EventResponse::Thought{ content, .. } => {
+                                thought_process.push_str(&content);
+                            },
+                            EventResponse::Content{ content, .. } => {
+                                collected_output.push_str(&content);
+                            },
+                            EventResponse::Complete{ .. } => {
+                                println!("Inference Complete");
+                                break;
+                            },
+                            _ => {}
                         }
-                        _ => {}
-                    },
-                    BrainstemBody::Asset(asset_event) => {
-                        println!("[Asset] Event: {:?}", asset_event);
-                        if let AssetEvent::Error(e) = asset_event {
-                            return Err(anyhow::anyhow!("Asset error: {}", e));
+                    } else if let Response::Status(status) = response {
+                        if status.status == "error" {
+                             return Err(anyhow::anyhow!("Received error during inference: {}", status.message.unwrap_or_default()));
                         }
-                    }
-                    BrainstemBody::Error(e) => {
-                        return Err(anyhow::anyhow!("Received error from brainstem: {}", e));
-                    }
-                    BrainstemBody::ModelList(_) => {
-                        // Ignored in test harness
                     }
                 },
-                Ok(None) => return Err(anyhow::anyhow!("Channel closed unexpectedly")),
-                Err(_) => return Err(anyhow::anyhow!("Timeout waiting for response")),
+                Ok(None) => return Err(anyhow::anyhow!("Inference stream closed unexpectedly")),
+                Err(_) => return Err(anyhow::anyhow!("Timeout waiting for inference response")),
             }
         }
-
-        // Cleanup
-        input_tx
-            .send(BrainstemInput {
-                id: None,
-                command: BrainstemCommand::Stop,
-            })
-            .await?;
-        let _ = orchestrator_handle.await?;
-
+        
         println!("Collected Output: {}", collected_output);
 
-        // Assertions (for stub mode)
         #[cfg(not(feature = "real-engine"))]
         {
             assert!(thought_process.contains("Narf!"));
@@ -184,16 +157,12 @@ mod tests {
             assert!(collected_output.contains(&prompt));
         }
 
-        // Assertions (for real mode)
         #[cfg(feature = "real-engine")]
         {
             if collected_output.trim().is_empty() {
                 println!("Warning: No content received from model.");
             } else {
-                println!(
-                    "Real Engine Output Verified: Length {}",
-                    collected_output.len()
-                );
+                println!("Real Engine Output Verified: Length {}", collected_output.len());
             }
         }
 

@@ -5,8 +5,11 @@ members = [
     "crates/cortex",
     "crates/brainstem",
     "crates/genius",
-    "crates/brainteaser"
-, "crates/ogenius"]
+    "crates/brainteaser",
+    "crates/ogenius",
+    "crates/thinkerv1",
+    "crates/thinkerv1-client"
+]
 default-members = ["crates/genius"]
 resolver = "2"
 

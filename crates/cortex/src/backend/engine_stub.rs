@@ -6,8 +6,8 @@ use async_std::task;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
-use rusty_genius_core::manifest::InferenceConfig;
-use rusty_genius_core::protocol::{InferenceEvent, ThoughtEvent};
+use rusty_genius_core::manifest::EngineConfig;
+use rusty_genius_thinkerv1::{EventResponse, Response};
 use std::time::Duration;
 
 #[derive(Default)]
@@ -45,43 +45,43 @@ impl Engine for Pinky {
 
     async fn infer(
         &mut self,
+        id: String,
         prompt: &str,
-        _config: InferenceConfig,
-    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+        config: EngineConfig,
+    ) -> Result<mpsc::Receiver<Result<Response>>> {
         if !self.model_loaded {
             return Err(anyhow!("Pinky Error: No model loaded!"));
         }
 
         let (mut tx, rx) = mpsc::channel(100);
         let prompt_owned = prompt.to_string();
+        let id_cloned = id.clone();
         eprintln!("DEBUG: Pinky::infer prompt: {}", prompt_owned);
         task::spawn(async move {
-            let _ = tx.send(Ok(InferenceEvent::ProcessStart)).await;
-            task::sleep(Duration::from_millis(50)).await;
-
-            // Emit a "thought"
-            let _ = tx
-                .send(Ok(InferenceEvent::Thought(ThoughtEvent::Start)))
-                .await;
-            let _ = tx
-                .send(Ok(InferenceEvent::Thought(ThoughtEvent::Delta(
-                    "Narf!".to_string(),
-                ))))
-                .await;
-            task::sleep(Duration::from_millis(50)).await;
-            let _ = tx
-                .send(Ok(InferenceEvent::Thought(ThoughtEvent::Stop)))
-                .await;
+            if config.show_thinking {
+                // Emit a "thought"
+                let _ = tx
+                    .send(Ok(Response::Event(EventResponse::Thought {
+                        id: id_cloned.clone(),
+                        content: "Narf!".to_string(),
+                    })))
+                    .await;
+                task::sleep(Duration::from_millis(50)).await;
+            }
 
             // Emit content (echo prompt mostly)
             let _ = tx
-                .send(Ok(InferenceEvent::Content(format!(
-                    "Pinky says: {}",
-                    prompt_owned
-                ))))
+                .send(Ok(Response::Event(EventResponse::Content {
+                    id: id_cloned.clone(),
+                    content: format!("Pinky says: {}", prompt_owned),
+                })))
                 .await;
 
-            let _ = tx.send(Ok(InferenceEvent::Complete)).await;
+            let _ = tx
+                .send(Ok(Response::Event(EventResponse::Complete {
+                    id: id_cloned,
+                })))
+                .await;
         });
 
         Ok(rx)
@@ -89,25 +89,39 @@ impl Engine for Pinky {
 
     async fn embed(
         &mut self,
+        id: String,
         input: &str,
-        _config: InferenceConfig,
-    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+        _config: EngineConfig,
+    ) -> Result<mpsc::Receiver<Result<Response>>> {
         if !self.model_loaded {
             return Err(anyhow!("Pinky Error: No model loaded!"));
         }
 
         let (mut tx, rx) = mpsc::channel(100);
         let input_owned = input.to_string();
+        let id_cloned = id.clone();
         eprintln!("DEBUG: Pinky::embed input: {}", input_owned);
         task::spawn(async move {
-            let _ = tx.send(Ok(InferenceEvent::ProcessStart)).await;
-            task::sleep(Duration::from_millis(50)).await;
-
             // Generate a simple mock embedding (384 dimensions with random-ish values)
             let mock_embedding: Vec<f32> = (0..384).map(|i| (i as f32 * 0.01).sin()).collect();
+            let mock_embedding_hex = mock_embedding
+                .iter()
+                .map(|f| f.to_bits().to_be_bytes())
+                .flatten()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
 
-            let _ = tx.send(Ok(InferenceEvent::Embedding(mock_embedding))).await;
-            let _ = tx.send(Ok(InferenceEvent::Complete)).await;
+            let _ = tx
+                .send(Ok(Response::Event(EventResponse::Embedding {
+                    id: id_cloned.clone(),
+                    vector_hex: mock_embedding_hex,
+                })))
+                .await;
+            let _ = tx
+                .send(Ok(Response::Event(EventResponse::Complete {
+                    id: id_cloned,
+                })))
+                .await;
         });
 
         Ok(rx)

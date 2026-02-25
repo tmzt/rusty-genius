@@ -1,6 +1,6 @@
 use facecrab::AssetAuthority;
 use futures::StreamExt;
-use rusty_genius_core::protocol::AssetEvent;
+use rusty_genius_thinkerv1::{Response, StatusResponse}; // Use Response and StatusResponse
 use std::error::Error;
 
 #[async_std::main]
@@ -10,7 +10,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("--- Mode 1: Simple One-Shot ---");
     println!("Checking model: {}", model_name);
-    let path = authority.ensure_model(model_name).await?;
+    // Provide a request ID and None for ModelConfig
+    let path = authority.ensure_model("downloader-one-shot".to_string(), model_name, None).await?;
     println!("Model ready at: {:?}\n", path);
 
     println!("--- Mode 2: Event-Based Streaming ---");
@@ -20,24 +21,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::fs::remove_file(&path)?;
     }
 
-    let mut events = authority.ensure_model_stream(model_name);
-    while let Some(event) = events.next().await {
-        match event {
-            AssetEvent::Started(name) => println!("Started resolution for: {}", name),
-            AssetEvent::Progress(current, total) => {
-                let pct = if total > 0 {
-                    (current as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
-                print!("\rDownload Progress: {:.1}% ({}/{})", pct, current, total);
-                let _ = std::io::Write::flush(&mut std::io::stdout());
-            }
-            AssetEvent::Complete(path) => {
-                println!("\nSuccessfully completed: {}", path);
-            }
-            AssetEvent::Error(err) => {
-                eprintln!("\nAsset Error: {}", err);
+    // Provide a request ID and None for ModelConfig
+    let mut events = authority.ensure_model_stream("downloader-stream".to_string(), model_name, None);
+    while let Some(response) = events.next().await {
+        if let Response::Status(status) = response {
+            match status.status.as_str() {
+                "downloading" => {
+                    if let Some(progress) = status.progress {
+                        print!("\rProgress: {:.1}%", progress * 100.0);
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                },
+                "ready" => println!("\nModel ready! Path: {}", status.message.unwrap_or_default()),
+                "error" => eprintln!("\nError: {}", status.message.unwrap_or_default()),
+                _ => println!("\nStatus: {}", status.status),
             }
         }
     }

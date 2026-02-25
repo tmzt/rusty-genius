@@ -16,9 +16,19 @@ rusty-genius = { path = "../genius", version = "0.1.3" }
 rusty-genius-core = { path = "../core", version = "0.1.3" }
 rusty-genius-stem = { path = "../brainstem", version = "0.1.3" }
 rusty-genius-cortex = { path = "../cortex", version = "0.1.3" }
+rusty-genius-thinkerv1 = { path = "../thinkerv1", version = "0.1.0" }
+rusty-genius-thinkerv1-client = { path = "../thinkerv1-client" }
 anyhow = "1.0"
 async-std = { version = "1.12", features = ["attributes"] }
 futures = "0.3"
+clap = { version = "4.4", features = ["derive"] }
+
+[dev-dependencies]
+walkdir = "2"
+
+[[bin]]
+name = "brainteaser-thinkerv1"
+path = "src/bin/thinkerv1_test.rs"
 
 [features]
 real-engine = ["rusty-genius-cortex/real-engine"]

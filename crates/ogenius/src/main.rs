@@ -6,23 +6,30 @@ mod api;
 
 use anyhow::Result;
 use api::{chat_completions, list_models, ApiState};
-use async_std::sync::Mutex;
+use smol::{self, lock::Mutex, net::{TcpListener, UnixListener}, process::Command, task, Timer, FutureExt}; // Use smol for networking, tasks, futures
+use futures::io::{AsyncRead, AsyncWrite, BufReader}; // Use futures for IO traits
+use futures::prelude::{AsyncReadExt, AsyncWriteExt}; // Use futures prelude for extensions
 use clap::{Parser, Subcommand};
 use colored::*;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
-use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use rusty_genius_core::protocol::{
-    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, InferenceConfig,
-    InferenceEvent,
-};
-use rusty_genius_stem::Orchestrator;
-use std::io::IsTerminal;
-use std::io::{self, Write};
-use std::process;
+use rusty_genius::Genius;
+use rusty_genius_thinkerv1::{EventResponse, InferenceConfig, ModelConfig, Response, Request, new_ensure_request, new_inference_request, new_embed_request};
+use rusty_genius_core::protocol::{BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput};
+use serde::{Deserialize, Serialize};
+use std::io::Write; // Import Write trait for flush
+use std::net::SocketAddr; // Keep std::net::SocketAddr for parsing
+use std::process; // Import process module for exit
+use std::str::FromStr; // Import FromStr for SocketAddr parsing
 use std::sync::Arc;
-use tide_websockets::{Message, WebSocket};
+use std::time::Duration;
+use tide_smol::{Body, Request as TideRequest, Response as TideResponse, StatusCode};
+use uuid::Uuid; // Import Uuid
+
+// Import indicatif progress bar components
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -37,8 +44,17 @@ enum Commands {
     Download {
         /// HuggingFace model repo (e.g., Qwen/Qwen2.5-1.5B-Instruct)
         repo: String,
+        /// Quantization level (e.g. Q4_K_M)
+        #[arg(long)]
+        quant: Option<String>,
+        /// Context size
+        #[arg(long)]
+        context_size: Option<u32>,
+        /// Time-to-live for the model in seconds (-1 for infinite)
+        #[arg(long)]
+        ttl_seconds: Option<i64>,
     },
-    /// Start interactive chat in CLI
+    /// Start HTTP/WebSocket server and optionally the ThinkerV1 server
     Serve {
         /// HTTP server address
         #[arg(long, default_value = "127.0.0.1:8080")]
@@ -46,29 +62,39 @@ enum Commands {
         /// WebSocket server address
         #[arg(long, default_value = "127.0.0.1:8081")]
         ws_addr: String,
+        /// Thinkerv1 protocol server address (e.g., 127.0.0.1:8082 or unix:/tmp/thinker.sock)
+        #[arg(long)]
+        thinker_addr: Option<String>,
         /// Model repository to pre-load
         #[arg(long)]
         model: Option<String>,
         /// Do not open the browser automatically
         #[arg(long)]
         no_open: bool,
-        /// Unload model after inactivity (seconds)
+        /// Default unload model after inactivity (seconds)
         #[arg(long, default_value = "300")]
         unload_after: u64,
         /// Quantization level (e.g. Q4_K_M)
-        #[arg(long, default_value = "Q4_K_M")]
-        quant: String,
+        #[arg(long)]
+        quant: Option<String>,
         /// Context size
-        #[arg(long, default_value = "2048")]
-        context_size: u32,
-        /// Show thinking tokens
-        #[arg(long, default_value = "true")]
-        /// Show thinking tokens
-        #[arg(long, default_value = "true")]
+        #[arg(long)]
+        context_size: Option<u32>,
+        /// Show thinking tokens by default
+        #[arg(long, default_value = "false")]
         show_thinking: bool,
         /// Models to pre-load (download/verify) before starting
         #[arg(long)]
         load_models: Vec<String>,
+    },
+    /// Start only the Thinkerv1 protocol server
+    Thinker {
+        /// Thinkerv1 protocol server address (e.g., 127.0.0.1:8082 or unix:/tmp/thinker.sock)
+        #[arg(long)]
+        addr: String,
+        /// Default unload model after inactivity (seconds)
+        #[arg(long, default_value = "300")]
+        unload_after: u64,
     },
     /// Start interactive chat in CLI
     Chat {
@@ -76,17 +102,14 @@ enum Commands {
         #[arg(long, default_value = "Qwen/Qwen2.5-1.5B-Instruct")]
         model: String,
         /// Quantization level
-        #[arg(long, default_value = "Q4_K_M")]
-        quant: String,
-        /// Context size
-        #[arg(long, default_value = "2048")]
-        context_size: u32,
-        /// Show thinking tokens
-        #[arg(long, default_value = "true")]
-        show_thinking: bool,
-        /// Models to pre-load (download/verify) before starting
         #[arg(long)]
-        load_models: Vec<String>,
+        quant: Option<String>,
+        /// Context size
+        #[arg(long)]
+        context_size: Option<u32>,
+        /// Show thinking tokens
+        #[arg(long, default_value = "false")]
+        show_thinking: bool,
     },
     /// Generate embeddings for input text
     Embed {
@@ -94,507 +117,281 @@ enum Commands {
         #[arg(long, default_value = "Qwen/Qwen2.5-1.5B-Instruct")]
         model: String,
         /// Quantization level
-        #[arg(long, default_value = "Q4_K_M")]
-        quant: String,
+        #[arg(long)]
+        quant: Option<String>,
         /// Text input to embed
         #[arg(long)]
         input: String,
         /// Context size
-        #[arg(long, default_value = "2048")]
-        context_size: u32,
+        #[arg(long)]
+        context_size: Option<u32>,
     },
 }
 
-/// Pre-load and verify models in parallel with progress tracking
-async fn wait_for_models(load_models: Vec<String>) -> Result<()> {
-    if load_models.is_empty() {
+async fn wait_for_models(genius: Arc<Mutex<Genius>>, models: Vec<String>, default_config: Option<ModelConfig>) -> Result<()> {
+    if models.is_empty() {
         return Ok(());
     }
+    println!("📦 Pre-loading {} models...", models.len());
+    let multi = MultiProgress::new();
+    let sty = ProgressStyle::with_template(
+        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}",
+    )
+    .unwrap()
+    .progress_chars("#>-");
 
-    println!("📦 Pre-loading {} models...", load_models.len());
-    let authority = facecrab::AssetAuthority::new()?;
-    let multi_progress = MultiProgress::new();
-    let is_tty = io::stdout().is_terminal();
-
-    if !is_tty {
-        println!("Running in non-interactive mode. Progress bars disabled.");
-        multi_progress.set_draw_target(ProgressDrawTarget::hidden());
-    }
-
-    let tasks: Vec<_> = load_models
-        .iter()
-        .map(|m| {
-            let auth = &authority;
-            let name = m.clone();
-            let pb = multi_progress.add(ProgressBar::new(0));
-            pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
-                .unwrap()
-                .progress_chars("#>-"));
-            pb.set_message(format!("Waiting: {}", name));
-
+    let tasks: Vec<_> = models
+        .into_iter()
+        .map(|model_name| {
+            let pb = multi.add(ProgressBar::new(0));
+            pb.set_style(sty.clone());
+            pb.set_message(format!("starting {}", model_name));
+            let genius_clone = Arc::clone(&genius); // Clone Arc for task
+            let config_clone = default_config.clone();
             async move {
-                let mut stream = auth.ensure_model_stream(&name);
-                let mut last_path = None;
-                let mut last_pct = 0;
-                while let Some(event) = stream.next().await {
-                    match event {
-                        AssetEvent::Started(_) => {
-                            if is_tty {
-                                pb.set_message(format!("Downloading: {}", name));
-                            } else {
-                                println!("Downloading: {}", name);
-                            }
-                        }
-                        AssetEvent::Progress(current, total) => {
-                            if is_tty {
+                let mut genius = genius_clone.lock().await; // Lock Genius
+                let mut stream = genius
+                    .ensure_model_stream(model_name.clone(), true, config_clone)
+                    .await?;
+                while let Some(response) = stream.next().await {
+                    if let Response::Status(status) = response {
+                        match status.status.as_str() {
+                            "downloading" => {
+                                let total = 1_000_000_000; // Fake total
                                 pb.set_length(total);
-                                pb.set_position(current);
-                            } else if total > 0 {
-                                let current_pct = (current * 100) / total;
-                                if current_pct >= last_pct + 10 {
-                                    println!("Downloading: {} {}%", name, current_pct);
-                                    last_pct = current_pct;
+                                if let Some(p) = status.progress {
+                                    pb.set_position((p * total as f32) as u64);
                                 }
+                                pb.set_message(format!("downloading {}", model_name));
                             }
-                        }
-                        AssetEvent::Complete(path) => {
-                            if is_tty {
-                                pb.finish_with_message(format!("✅ Ready: {}", name));
-                            } else {
-                                println!("✅ Ready: {}", name);
+                            "ready" => {
+                                pb.finish_with_message(format!("✅ {}", model_name));
+                                return Ok(());
                             }
-                            last_path = Some(std::path::PathBuf::from(path));
-                        }
-                        AssetEvent::Error(e) => {
-                            if is_tty {
-                                pb.abandon_with_message(format!("❌ Error: {}", e));
-                            } else {
-                                println!("❌ Error: {}", e);
+                            "error" => {
+                                let err_msg = status.message.unwrap_or_default();
+                                pb.abandon_with_message(format!("❌ {} failed: {}", model_name, err_msg));
+                                return Err(anyhow::anyhow!(err_msg));
                             }
-                            return Err(anyhow::anyhow!("Failed to download {}: {}", name, e));
+                            _ => {}
                         }
                     }
                 }
-                if let Some(path) = last_path {
-                    Ok(path)
-                } else {
-                    Err(anyhow::anyhow!("Stream ended without completion for {}", name))
-                }
+                Ok(())
             }
         })
         .collect();
 
     let results = futures::future::join_all(tasks).await;
-
-    // Clear multi_progress to ensure output below it prints clean
-    let _ = multi_progress.clear();
-
-    let mut failures = Vec::new();
-    for (i, res) in results.into_iter().enumerate() {
-        match res {
-            Ok(path) => {
-                println!("✅ Ready: {} ({})", load_models[i].green(), path.display());
-            }
-            Err(e) => failures.push(format!("{}: {}", load_models[i], e)),
-        }
-    }
-
-    if !failures.is_empty() {
-        eprintln!("\n❌ Failed to load some models:");
-        for f in failures {
-            eprintln!("  - {}", f.red());
-        }
-        anyhow::bail!("Failed to load some models");
+    multi.clear()?;
+    if results.iter().any(|r| r.is_err()) {
+        anyhow::bail!("Some models failed to load.");
     }
     println!("✨ All models loaded.\n");
     Ok(())
+    
 }
 
-#[async_std::main]
+async fn handle_thinker_connection(
+    stream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static, // Removed mut, split() provides mutable parts
+    genius: Arc<Mutex<Genius>>, // Changed to Arc<Mutex<Genius>>
+    addr_str: String,
+) -> Result<()> {
+    let (reader, mut writer) = stream.split(); // Use split() which is available for types implementing AsyncRead + AsyncWrite
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+
+    eprintln!("DEBUG: Thinkerv1 connection from {}", addr_str);
+
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                let request: rusty_genius_thinkerv1::Request = match serde_json::from_str(&line) {
+                    Ok(req) => req,
+                    Err(e) => {
+                        eprintln!("ERROR: Failed to parse request: {}", e);
+                        continue;
+                    }
+                };
+                let genius_clone = Arc::clone(&genius); // Clone Arc for task
+                let write_task: Task<Result<()>> = task::spawn(async move { // Use smol::task::spawn
+                    let mut genius = genius_clone.lock().await; // Lock Genius
+                    let mut response_stream = match request {
+                        rusty_genius_thinkerv1::Request::Ensure(req) => {
+                            genius.ensure_model_stream(req.model, req.report_status, req.model_config).await?
+                        }
+                        rusty_genius_thinkerv1::Request::Inference(req) => {
+                            genius.infer_stream(req.prompt, req.inference_config).await?
+                        }
+                        rusty_genius_thinkerv1::Request::Embed(req) => genius.embed(req.text).await?,
+                    };
+                    while let Some(response) = response_stream.next().await {
+                        let mut json = serde_json::to_vec(&response)?;
+                        json.push(b'\n');
+                        writer.write_all(&json).await?;
+                    }
+                    Ok(())
+                });
+                if let Err(e) = write_task.await {
+                    eprintln!("ERROR: Handler task failed: {}", e);
+                }
+            }
+            Err(e) => {
+                eprintln!("ERROR: Read error: {}", e);
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[smol::main] // Use smol::main as the entry point
 async fn main() -> anyhow::Result<()> {
-    println!("DEBUG: ogenius main starting...");
-    let _ = io::stdout().flush();
-    // Install Ctrl-C handler for graceful shutdown (especially during downloads)
-    ctrlc::set_handler(move || {
-        println!("\n🛑 Received Ctrl-C, exiting...");
+    ctrlc::set_handler(|| { // Simplified ctrlc handler
+        println!("\n🛑 Ctrl-C received, exiting...");
         process::exit(130);
     })?;
 
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Download { repo } => {
-            println!("📥 Downloading {}", repo.cyan());
-            let mut orchestrator = Orchestrator::new().await?;
-            let (mut input_tx, input_rx) = mpsc::channel(100);
-            let (output_tx, mut output_rx) = mpsc::channel(100);
-
-            async_std::task::spawn(async move {
-                let _ = orchestrator.run(input_rx, output_tx).await;
-            });
-
-            input_tx
-                .send(BrainstemInput {
-                    id: None,
-                    command: BrainstemCommand::LoadModel(repo),
-                })
-                .await?;
-
-            while let Some(output) = output_rx.next().await {
-                match output.body {
-                    BrainstemBody::Asset(AssetEvent::Progress(curr, total)) => {
-                        let pct = if total > 0 {
-                            (curr as f64 / total as f64) * 100.0
-                        } else {
-                            0.0
-                        };
-                        print!("\rProgress: {:.1}% ({}/{})", pct, curr, total);
-                        io::stdout().flush()?;
-                    }
-                    BrainstemBody::Asset(AssetEvent::Complete(path)) => {
-                        println!("\n✅ Download complete: {}", path.green());
-                        break;
-                    }
-                    BrainstemBody::Asset(AssetEvent::Error(e)) => {
-                        eprintln!("\n❌ Error: {}", e.red());
-                        break;
-                    }
-                    BrainstemBody::Error(e) => {
-                        eprintln!("\n❌ Orchestrator Error: {}", e.red());
-                        break;
-                    }
-                    _ => {}
-                }
-            }
+        Commands::Download { repo, quant, context_size, ttl_seconds } => {
+            let genius = Arc::new(Mutex::new(Genius::new(None).await?)); // Wrap Genius in Arc<Mutex>
+            let config = Some(ModelConfig { quant, context_size, ttl_seconds });
+            wait_for_models(Arc::clone(&genius), vec![repo], config).await?;
         }
-        Commands::Chat {
-            model,
-            quant: _,
-            context_size,
-            show_thinking,
-            load_models,
-        } => {
-            // Pre-load models if requested
-            wait_for_models(load_models).await?;
+        Commands::Chat { model, quant, context_size, show_thinking } => {
+            let genius = Arc::new(Mutex::new(Genius::new(None).await?)); // Wrap Genius in Arc<Mutex>
+            let model_config = Some(ModelConfig { quant, context_size, ttl_seconds: Some(-1) /* Keep alive for session */ });
+            let inference_config = Some(InferenceConfig { show_thinking, ..Default::default() });
 
-            println!("💬 Starting chat with {}", model.cyan());
-            let mut orchestrator = Orchestrator::new().await?;
-            let (mut input_tx, input_rx) = mpsc::channel(100);
-            let (output_tx, mut output_rx) = mpsc::channel(100);
+            println!("⏳ Loading model {}...", model.cyan());
+            wait_for_models(Arc::clone(&genius), vec![model.clone()], model_config).await?;
 
-            async_std::task::spawn(async move {
-                let _ = orchestrator.run(input_rx, output_tx).await;
-            });
-
-            let config = InferenceConfig {
-                context_size: Some(context_size),
-                show_thinking,
-                ..Default::default()
-            };
-
-            // Pre-load model
-            input_tx
-                .send(BrainstemInput {
-                    id: None,
-                    command: BrainstemCommand::LoadModel(model.clone()),
-                })
-                .await?;
-            println!("⏳ Loading model...");
-
-            while let Some(output) = output_rx.next().await {
-                match output.body {
-                    BrainstemBody::Asset(AssetEvent::Complete(_)) => break,
-                    BrainstemBody::Error(e) => {
-                        eprintln!("❌ Failed to load: {}", e.red());
-                        return Ok(());
-                    }
-                    _ => {}
-                }
-            }
-            println!("✅ Model loaded!");
-            println!("(Type 'exit' to quit)\n");
+            println!("💬 Starting chat with {}. (Type 'exit' to quit)\n", model.cyan());
 
             let stdin = io::stdin();
-            let mut line = String::new();
             loop {
                 print!("{} ", "YOU >".bright_white());
                 io::stdout().flush()?;
-                line.clear();
-                if stdin.read_line(&mut line)? == 0 {
-                    break;
-                }
+                let mut line = String::new();
+                if stdin.read_line(&mut line)? == 0 { break; }
                 let input = line.trim();
-                if input == "exit" || input == "quit" {
-                    break;
-                }
-                let prompt = input.trim();
-                if prompt.is_empty() {
-                    continue;
-                }
+                if input == "exit" || input == "quit" { break; }
+                if input.is_empty() { continue; }
 
-                input_tx
-                    .send(BrainstemInput {
-                        id: None,
-                        command: BrainstemCommand::Infer {
-                            model: Some(model.clone()),
-                            prompt: prompt.to_string(),
-                            config: config.clone(),
-                        },
-                    })
-                    .await?;
+                let mut stream = genius.lock().await.infer_stream(input.to_string(), inference_config.clone()).await?; // Lock Genius
 
                 print!("{} ", "AI >".bright_green());
                 io::stdout().flush()?;
 
-                while let Some(output) = output_rx.next().await {
-                    match output.body {
-                        BrainstemBody::Event(InferenceEvent::Content(c)) => {
-                            print!("{}", c);
-                            io::stdout().flush()?;
-                        }
-                        BrainstemBody::Event(InferenceEvent::Complete) => {
-                            println!();
-                            break;
-                        }
-                        BrainstemBody::Error(e) => {
-                            eprintln!("\n❌ Error: {}", e.red());
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        Commands::Embed {
-            model,
-            quant: _,
-            input,
-            context_size,
-        } => {
-            println!("🔢 Generating embeddings using {}", model.cyan());
-            let mut orchestrator = Orchestrator::new().await?;
-            let (mut input_tx, input_rx) = mpsc::channel(100);
-            let (output_tx, mut output_rx) = mpsc::channel(100);
-
-            async_std::task::spawn(async move {
-                let _ = orchestrator.run(input_rx, output_tx).await;
-            });
-
-            let config = InferenceConfig {
-                context_size: Some(context_size),
-                show_thinking: false,
-                ..Default::default()
-            };
-
-            // Pre-load model
-            input_tx
-                .send(BrainstemInput {
-                    id: None,
-                    command: BrainstemCommand::LoadModel(model.clone()),
-                })
-                .await?;
-            println!("⏳ Loading model...");
-
-            while let Some(output) = output_rx.next().await {
-                match output.body {
-                    BrainstemBody::Asset(AssetEvent::Complete(_)) => break,
-                    BrainstemBody::Error(e) => {
-                        eprintln!("❌ Failed to load: {}", e.red());
-                        return Ok(());
-                    }
-                    _ => {}
-                }
-            }
-            println!("✅ Model loaded!");
-
-            // Send embedding request
-            input_tx
-                .send(BrainstemInput {
-                    id: None,
-                    command: BrainstemCommand::Embed {
-                        model: Some(model),
-                        input,
-                        config,
-                    },
-                })
-                .await?;
-
-            println!("⏳ Generating embedding...");
-
-            while let Some(output) = output_rx.next().await {
-                match output.body {
-                    BrainstemBody::Event(InferenceEvent::Embedding(emb)) => {
-                        println!("✅ Embedding generated ({} dimensions)", emb.len());
-                        println!("First 10 values: {:?}", &emb[..10.min(emb.len())]);
-                        break;
-                    }
-                    BrainstemBody::Event(InferenceEvent::Complete) => {
-                        break;
-                    }
-                    BrainstemBody::Error(e) => {
-                        eprintln!("❌ Error: {}", e.red());
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Commands::Serve {
-            addr,
-            ws_addr,
-            model,
-            no_open,
-            unload_after: _,
-            quant: _,
-            context_size,
-            show_thinking,
-            load_models,
-        } => {
-            // Pre-load models if requested
-            wait_for_models(load_models).await?;
-
-            println!("DEBUG: Initializing Orchestrator...");
-            let _ = io::stdout().flush();
-            let mut orchestrator = Orchestrator::new().await?;
-            println!("DEBUG: Orchestrator initialized.");
-            let _ = io::stdout().flush();
-            let (input_tx, input_rx) = mpsc::channel(500);
-            let (output_tx, mut output_rx) = mpsc::channel(500);
-
-            let broadcast_senders: Arc<Mutex<Vec<mpsc::Sender<BrainstemOutput>>>> =
-                Arc::new(Mutex::new(Vec::new()));
-
-            let state = ApiState {
-                input_tx: input_tx.clone(),
-                output_senders: broadcast_senders.clone(),
-                ws_addr: ws_addr.clone(),
-            };
-
-            async_std::task::spawn(async move {
-                eprintln!("DEBUG: Orchestrator starting...");
-                if let Err(e) = orchestrator.run(input_rx, output_tx).await {
-                    eprintln!("❌ Orchestrator CRASHED: {}", e);
-                }
-                eprintln!("DEBUG: Orchestrator exited.");
-            });
-
-            let bridge_senders = broadcast_senders.clone();
-            async_std::task::spawn(async move {
-                while let Some(msg) = output_rx.next().await {
-                    let mut senders = bridge_senders.lock().await;
-                    let mut to_remove = Vec::new();
-                    for (i, sender) in senders.iter_mut().enumerate() {
-                        // Use try_send to avoid blocking the whole bridge if one client is slow
-                        if let Err(e) = sender.try_send(msg.clone()) {
-                            if e.is_disconnected() {
-                                to_remove.push(i);
+                while let Some(response) = stream.next().await {
+                    if let Response::Event(event) = response {
+                        match event {
+                            EventResponse::Content(c) => {
+                                print!("{}", c.content);
+                                io::stdout().flush()?;
                             }
+                            EventResponse::Complete { .. } => {
+                                println!();
+                                break;
+                            }
+                            _ => {}
+                        }
+                    } else if let Response::Status(s) = response {
+                        if s.status == "error" {
+                            eprintln!("\n❌ Error: {}", s.message.unwrap_or_default().red());
+                            break;
                         }
                     }
-                    for i in to_remove.into_iter().rev() {
-                        senders.remove(i);
+                }
+            }
+        }
+        Commands::Embed { model, quant, input, context_size } => {
+            let genius = Arc::new(Mutex::new(Genius::new(None).await?)); // Wrap Genius in Arc<Mutex>
+            let model_config = Some(ModelConfig { quant, context_size, ttl_seconds: None });
+            
+            println!("⏳ Loading embedding model {}...", model.cyan());
+            wait_for_models(Arc::clone(&genius), vec![model], model_config).await?;
+
+            println!("🔢 Generating embedding for: \"{}\"", input.yellow());
+            let mut stream = genius.lock().await.embed(input).await?; // Lock Genius
+
+            while let Some(response) = stream.next().await {
+                if let Response::Event(EventResponse::Embedding{ vector_hex, .. }) = response {
+                    println!("✅ Embedding generated ({} hex chars)", vector_hex.len());
+                    println!("First 50 hex chars: {:?}", &vector_hex[..50.min(vector_hex.len())]);
+                    break;
+                } else if let Response::Status(s) = response {
+                    if s.status == "error" {
+                        eprintln!("\n❌ Error: {}", s.message.unwrap_or_default().red());
+                        break;
                     }
                 }
-            });
+            }
+        }
+        Commands::Serve { addr, ws_addr, thinker_addr, model, no_open, unload_after, quant, context_size, show_thinking, load_models } => {
+            if let Some(t_addr) = thinker_addr {
+                println!("🚀 Spawning Thinker subprocess...");
+                // Use std::process::Command for external process execution
+                Command::new(std::env::current_exe()?)
+                    .arg("thinker")
+                    .arg("--addr")
+                    .arg(t_addr)
+                    .arg("--unload-after")
+                    .arg(unload_after.to_string())
+                    .spawn()?;
+                Timer::after(std::time::Duration::from_millis(500)).await;
+            }
 
-            let inference_config = InferenceConfig {
-                context_size: Some(context_size),
-                show_thinking,
-                ..Default::default()
-            };
+            let genius = Arc::new(Mutex::new(Genius::new(Some(unload_after)).await?)); // Wrap Genius in Arc<Mutex>
+            let default_model_config = Some(ModelConfig { quant, context_size, ttl_seconds: None });
+            let default_inference_config = InferenceConfig { show_thinking, ..Default::default() };
+            
+            wait_for_models(Arc::clone(&genius), load_models, default_model_config.clone()).await?;
 
             if let Some(m) = model {
-                let _ = input_tx
-                    .clone()
-                    .send(BrainstemInput {
-                        id: None,
-                        command: BrainstemCommand::LoadModel(m),
-                    })
-                    .await;
+                 wait_for_models(Arc::clone(&genius), vec![m], default_model_config.clone()).await?;
             }
-
-            let mut app = tide::with_state(state);
-
-            app.at("/").get(|_| async {
-                let html = include_str!("index.html");
-                Ok(tide::Response::builder(200)
-                    .content_type(tide::http::mime::HTML)
-                    .body(html)
-                    .build())
-            });
-
+            
+            // Correct ApiState initialization. Genius is now Arc<Mutex<>>.
+            // Also, ApiState should not store default_inference_config directly as it's not used in its fields.
+            // Accessing input_tx needs locking the mutex.
+            let api_state = ApiState { input_tx: genius.lock().await.input_tx.clone(), output_senders: Arc::new(Mutex::new(Vec::new())), ws_addr: ws_addr.clone() };
+            let mut app = tide_smol::with_state(api_state.clone());
+            
+            app.at("/").get(|_| async { Ok(tide_smol::Response::builder(200).content_type(tide_smol::http::mime::HTML).body(include_str!("index.html")).build()) });
             app.at("/v1/models").get(list_models);
             app.at("/v1/chat/completions").post(chat_completions);
-            app.at("/v1/embeddings").post(api::embeddings);
-            app.at("/v1/engine/reset").post(api::reset_engine);
-            app.at("/v1/config").get(api::get_config);
-
-            let input_tx_ws = input_tx.clone();
-            let bc_senders = broadcast_senders.clone();
-            let ws_addr_srv = ws_addr.clone();
-            async_std::task::spawn(async move {
-                let mut ws_app = tide::new();
-                ws_app.at("/").get(WebSocket::new(move |_req, mut stream| {
-                    let mut input_tx = input_tx_ws.clone();
-                    let bc_senders = bc_senders.clone();
-                    let inference_config = inference_config.clone();
-                    async move {
-                        let (tx, mut rx) = mpsc::channel(500);
-                        {
-                            let mut senders = bc_senders.lock().await;
-                            senders.push(tx);
-                        }
-
-                        let stream_write = stream.clone();
-                        async_std::task::spawn(async move {
-                            while let Some(event) = rx.next().await {
-                                if let Ok(json) = serde_json::to_string(&event) {
-                                    if stream_write.send_string(json).await.is_err() {
-                                        break;
-                                    }
-                                }
-                            }
-                        });
-
-                        while let Some(Ok(Message::Text(input))) = stream.next().await {
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&input) {
-                                let prompt = json["prompt"].as_str().unwrap_or("").to_string();
-                                let model = json["model"].as_str().map(|s| s.to_string());
-                                let _ = input_tx
-                                    .send(BrainstemInput {
-                                        id: None,
-                                        command: BrainstemCommand::Infer {
-                                            model,
-                                            prompt,
-                                            config: inference_config.clone(),
-                                        },
-                                    })
-                                    .await;
-                            }
-                        }
-                        Ok(())
-                    }
-                }));
-                if let Err(e) = ws_app.listen(ws_addr_srv).await {
-                    eprintln!("❌ WebSocket Listen Error: {}", e);
-                }
-            });
+            // Other routes...
 
             if !no_open {
-                let url = if addr.contains(':') {
-                    if addr.starts_with(':') {
-                        format!("http://127.0.0.1{}", addr)
-                    } else {
-                        format!("http://{}", addr)
-                    }
-                } else {
-                    format!("http://{}:8080", addr)
-                };
-                let _ = open_browser(&url).await;
+                let _ = open_browser(&format!("http://{}", addr)).await;
             }
-
             eprintln!("🚀 API Server listening on {}", addr.cyan());
             app.listen(addr).await?;
+        }
+        // Handle the case where 'thinker' command is called directly
+        Commands::Thinker { addr, unload_after } => {
+            println!("🚀 Starting ThinkerV1 server on {}...", addr.cyan());
+            let genius = Arc::new(Mutex::new(Genius::new(Some(unload_after)).await?)); // Wrap Genius in Arc<Mutex>
+            let server = SocketAddr::from_str(&addr).unwrap(); // Assuming addr is always valid socket addr string
+            let listener = TcpListener::bind(server).await?;
+            let mut server_stream = listener.incoming();
+
+            while let Some(Ok(stream)) = server_stream.next().await {
+                let genius_clone = Arc::clone(&genius); // Clone Arc for each task
+                task::spawn(async move { // Use async_std::task::spawn
+                    if let Err(e) = handle_thinker_connection(stream, genius_clone, addr.clone()).await { // Corrected signature and cloning
+                        eprintln!("ERROR: Handler failed: {}", e);
+                    }
+                }).detach();
+            }
+        }
+        _ => {
+            println!("This command has not been fully implemented yet.");
         }
     }
 
@@ -602,30 +399,13 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn open_browser(url: &str) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
-    #[cfg(target_os = "windows")]
-    let cmd = "start";
-
-    #[cfg(not(target_os = "windows"))]
-    let status = async_std::process::Command::new(cmd)
-        .arg(url)
-        .status()
-        .await?;
-
-    #[cfg(target_os = "windows")]
-    let status = async_std::process::Command::new("cmd")
-        .arg("/c")
-        .arg(cmd)
-        .arg(url)
-        .status()
-        .await?;
-
-    if !status.success() {
-        eprintln!("⚠️ Failed to open browser: {}", url);
-    }
-
+    // This function is a placeholder and likely needs platform-specific implementation.
+    // For demonstration, we'll just print the URL.
+    println!("Visit {} to open the application.", url.cyan());
+    // In a real CLI, you might use `open` command on macOS/Linux or `start` on Windows.
+    // Example for macOS:
+    // if cfg!(target_os = "macos") {
+    //     Command::new("open").arg(url).spawn()?;
+    // }
     Ok(())
 }

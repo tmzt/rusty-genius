@@ -1,10 +1,10 @@
 #!/bin/bash
-set -e
+#
+# Runs the brainteaser test suite against the "Pinky" stub engine.
+# This does NOT require the `real-engine` feature.
+#
 
-# Fix for permissions: Ensure TMPDIR is local and writable
-export TMPDIR="/tmp/rusty-genius-tmp"
-mkdir -p "$TMPDIR"
-export CARGO_INCREMENTAL=0
-# Run cargo test for brain-teaser with default features (stub)
-# Ensure we use --test-threads=1 if needed, but default is fine for now
-cargo test --locked -p rusty-genius-teaser -- --nocapture
+set -e
+echo "🧠 Running tests with Pinky (Stub Engine)..."
+cargo test -p rusty-genius-teaser -- --nocapture
+echo "✅ Pinky tests passed!"

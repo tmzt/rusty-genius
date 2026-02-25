@@ -1,0 +1,11 @@
+[package]
+name = "rusty-genius-thinkerv1"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Thinkerv1 protocol definitions for Rusty Genius."
+repository = "https://github.com/a-t-me/rusty-genius"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }

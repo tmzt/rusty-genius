@@ -2,7 +2,10 @@
 trigger: always_on
 ---
 
-Here is the **Finalized System Generation Prompt** with the additional Websocket and GUI requirements integrated.
+Here is the **Finalized System Generation Prompt**
+Here is the **Updated System Generation Prompt**.
+
+I have modified **Section 2A (Thinkerv1 Protocol)** to specify that `-1` represents an infinite TTL override within the `model_config`, rather than `0`.
 
 You can paste this entire block directly into your LLM.
 
@@ -22,7 +25,7 @@ Proceed to generate the solution based on the **System Specification**, **Compon
 
 * **Name:** `rusty-genius`
 * **Metaphor:** Biological Nervous System.
-* **Ogenius:** The Voice (CLI & HTTP/WebSocket Server).
+* **Ogenius:** The Voice (CLI & HTTP/WebSocket/Thinkerv1 Server).
 * **Genius:** The Facade (User API).
 * **Brainstem:** The Orchestrator (Event Loop & State).
 * **Cortex:** The Muscle (Inference Engine).
@@ -35,32 +38,42 @@ Proceed to generate the solution based on the **System Specification**, **Compon
 
 The project is a Cargo Workspace. All internal crates reside in `crates/`.
 
-1. **`crates/core`** (`rusty-genius-core`):
-* **Role:** Shared Vocabulary. Zero dependencies on other internal crates.
+1. **`crates/thinkerv1`** (`rusty-genius-thinkerv1`):
+* **Role:** Thinkerv1 Protocol Definitions.
+* **Content:** Serializable request/response message schemas for IPC/TCP communication.
 
 
-2. **`crates/facecrab`** (`facecrab`):
+2. **`crates/thinkerv1-client`** (`rusty-genius-thinkerv1-client`):
+* **Role:** External Thinkerv1 Client.
+* **Content:** Exposed client library using `smol` (TCP, UDS, Command transports).
+
+
+3. **`crates/core`** (`rusty-genius-core`):
+* **Role:** Shared Vocabulary. Zero dependencies on other internal crates except `thinkerv1`.
+
+
+4. **`crates/facecrab`** (`facecrab`):
 * **Role:** Asset Authority (Downloads & Registry).
 
 
-3. **`crates/cortex`** (`rusty-genius-cortex`):
+5. **`crates/cortex`** (`rusty-genius-cortex`):
 * **Role:** Inference Engine (`llama.cpp` bindings).
 
 
-4. **`crates/brainstem`** (`rusty-genius-stem`):
+6. **`crates/brainstem`** (`rusty-genius-stem`):
 * **Role:** Orchestrator (Event Loop).
 
 
-5. **`crates/genius`** (`rusty-genius`):
+7. **`crates/genius`** (`rusty-genius`):
 * **Role:** Public Facade (Library API).
 
 
-6. **`crates/ogenius`** (`ogenius`):
+8. **`crates/ogenius`** (`ogenius`):
 * **Role:** CLI & API Server.
-* **Content:** `clap` CLI, `tide` HTTP/WebSocket server, Embedded HTML UI.
+* **Content:** `clap` CLI, `tide` HTTP/WebSocket server, embedded HTML UI, and `thinkerv1` TCP/UDS server.
 
 
-7. **`crates/brainteaser`** (`rusty-genius-teaser`):
+9. **`crates/brainteaser`** (`rusty-genius-teaser`):
 * **Role:** QA/Testing Harness.
 
 
@@ -69,70 +82,97 @@ The project is a Cargo Workspace. All internal crates reside in `crates/`.
 
 ## 2. Detailed Component Logic
 
-### A. Protocol (`core`)
+### A. Thinkerv1 Protocol (`thinkerv1`)
+
+* **Role:** Define serializable messages representing the Thinkerv1 AI inference protocol.
+* **Format Requirement:** All data sent over the raw TCP/UDS/IPC connection must use **JSONL (nd-json)** format. Every JSON object sent or received must be terminated with a newline (`\n`).
+* **Multiplexing:** Every request and response must include an `id` (String or UUID) to correlate concurrent responses to specific requests over the single raw stream.
+* **Ensure Model:**
+* `Request`: `{ "id": "<id>", "action": "ensure", "model": "<HF-ID>", "report_status": bool, "model_config": { "ttl_seconds": 3600, ... } }\n`
+* *(Note: `model_config` is optional. If provided, all of its internal fields are also optional. This includes `ttl_seconds` to define the model's time-to-live in memory. `-1` represents infinite TTL, overriding any server defaults).*
+
+
+* `Response`: If `report_status` is true, stream download updates (e.g., `{ "id": "<id>", "status": "downloading", "progress": 0.5 }\n`). Always conclude with `{ "id": "<id>", "status": "ready" }\n` or an error.
+
+
+* **Inference:**
+* `Request`: `{ "id": "<id>", "action": "inference", "prompt": "...", "inference_config": { "show_thinking": bool, ... } }\n`
+* *(Note: `inference_config` is optional. If provided, all of its internal fields, such as `show_thinking`, `temperature`, etc., are also optional).*
+
+
+* `Response`: Streamed events. **Only** emit low-level thinking updates (e.g., `{ "id": "<id>", "type": "thought", "content": "..." }\n`) if the request's `inference_config.show_thinking` is true. Follow with `{ "id": "<id>", "type": "content", "content": "..." }\n` and `{ "id": "<id>", "type": "complete" }\n`.
+
+
+* **Embedding:**
+* `Request`: `{ "id": "<id>", "action": "embed", "text": "..." }\n`
+* `Response`: `{ "id": "<id>", "type": "embedding", "vector": "<hex_encoded_string>" }\n` *(Note: the vector bytes must be hex-encoded, not a JSON array).*
+
+
+
+### B. Core Shared Types (`core`)
 
 * **Errors:** `thiserror` based `GeniusError`.
-* **Protocol:** `InferenceEvent` (Thought, Content, Complete) and `InferenceConfig`.
+* **Internal Protocol:** * `BrainstemInput`: A struct/enum wrapping inbound commands (Inference requests, Embeddings, `InferenceConfig`, `ModelConfig`, etc.) along with an `id` string so the orchestrator can track the caller.
+* `BrainstemOutput`: A struct/enum wrapping outbound events (e.g., `InferenceEvent` containing Thought/Content/Complete, Embedding vectors, or Status updates). **Crucially, this must include the `id**` to map the asynchronous internal engine events back to the correct external connection.
 
-### B. Asset Management (`facecrab`)
+
+
+### C. Asset Management (`facecrab`)
 
 * **Stack:** `surf` + `smol`/`async-std` (No `tokio`).
 * **Logic:** Registry check  HF Resolve  Download  Update.
 
-### C. The Engine (`cortex`)
+### D. The Engine (`cortex`)
 
 * **Pinky (Stub):** Simulates tokens for fast testing.
 * **Brain (Real):** `llama.cpp` bindings (Optional feature `real-engine`).
 
-### D. Orchestration (`brainstem`)
+### E. Orchestration (`brainstem`)
 
-* **Logic:** Central event loop managing `cortex` lifecycle and `facecrab` delegation.
+* **Logic:** Central event loop managing `cortex` lifecycle and `facecrab` delegation. It receives `BrainstemInput` and routes `BrainstemOutput` back to the facade. It must honor custom `ttl_seconds` (including `-1` for infinite TTL overrides) defined in the incoming `BrainstemInput` payload to keep models resident in RAM as requested.
 
-### E. The Interface (`ogenius`)
+### F. The Interface (`ogenius`)
 
 * **Shared Parameters:** Both `chat` and `serve` must accept inference config flags: `--quant`, `--context-size`, `--show-thinking`.
 * **CLI Commands:**
-* `download <HF-ID>`: Explicitly download a model (e.g., `ogenius download Qwen/Qwen2.5-1.5B-Instruct`).
-* `chat`: Starts an **Interactive REPL** mode.
-* **Input:** Read stdin loop.
-* **Output:** Stream tokens to stdout.
-
-
-* `serve`: Starts the API/Web server.
+* `download <HF-ID>`: Explicitly download a model.
+* `chat`: Starts an **Interactive REPL** mode mapping stdin to model prompts.
+* `serve`: Starts the API/Web/Thinkerv1 server ecosystem.
 * **Server-Only Params:**
-* `--addr <IP:PORT>` (Default: `127.0.0.1:8080`): Main HTTP entry point for API and Web UI.
-* `--ws-addr <IP:PORT>` (Default: `127.0.0.1:8081`): Dedicated WebSocket endpoint for real-time chat streaming.
-* `--unload-after <SECONDS>`. Unloads model after inactivity.
+* `--addr <IP:PORT>` (Default: `127.0.0.1:8080`): Main HTTP entry point.
+* `--ws-addr <IP:PORT>` (Default: `127.0.0.1:8081`): WebSocket endpoint for chat.
+* `--thinker-addr <ADDR>`: Endpoint for the `thinkerv1` protocol. Supports TCP or Unix Domain Sockets .
+* `--unload-after <SECONDS>`. Unloads model after inactivity (acts as the default TTL unless overridden by a client request).
 
 
 
 
 
 
-* **Server Logic (Tide):**
+* **Server Logic:**
 * **Cold Start:** If a request arrives while unloaded, auto-reload.
-* **Logging:** On cold reload, log `NOTICE: Model reload took <DURATION>.` Followed by the suggestion: *"Increase --unload-after or use --no-unload to avoid delay."*
-* **API Endpoints:** `POST /v1/chat/completions` (OpenAI compat), `GET /v1/models`.
-* **Web Interface:**
-* Serve a lightweight, single-file `index.html` chat interface at `GET /`.
-* **Design:** Clean, minimal aesthetic matching the look and feel of `./site`.
-* **Features:**
-* Model Dropdown (populated via `/v1/models`).
-* Chat history view.
-* "Thinking" toggle.
-* Input area.
-
-
-* **Transport:** The UI should connect to the WebSocket defined by `--ws-addr` for low-latency token streaming.
+* **Logging:** On cold reload, log exactly: `NOTICE: Model reload took <DURATION>.` Followed by: *"Increase --unload-after or use --no-unload to avoid delay."*
+* **Thinkerv1 Protocol:** Accept connections on the `--thinker-addr`. Handle the raw TCP/UDS socket directly by reading/writing **JSONL (nd-json)** lines. Parse external requests into `BrainstemInput` (preserving `id`), route them to the engine, and stream `BrainstemOutput` events back over the socket mapped to the correct `id`.
+* **API Endpoints:** `POST /v1/chat/completions`, `GET /v1/models`.
+* **Web Interface:** Embedded `index.html` chat GUI over WebSocket.
 
 
 
-
-
-### F. Testing (`brainteaser`)
+### G. Testing (`brainteaser`)
 
 * **Fixtures:** Scan `fixtures/...` and run integration tests.
-* **Data:** Generate fixtures for Qwen 1.5B/3B (Low RAM).
+
+### H. Thinkerv1 Client (`thinkerv1-client`)
+
+* **Role:** Provide an exposed, developer-friendly Rust client for interacting with any `thinkerv1` compliant server.
+* **Stack Requirement:** Must exclusively use **`smol`** for async runtime and networking. **No `tokio**`.
+* **Supported Transports:**
+* **TCP:** Connect via `smol::net::TcpStream`.
+* **UDS:** Connect via Unix Domain Sockets (`smol::net::unix::UnixStream`).
+* **Command (RSH/Subprocess):** Spawn a shell command (e.g., `ssh user@host ogenius serve ...` or a local binary) using `smol::process::Command` and perform JSONL IPC over the child process's mapped `stdin` and `stdout`.
+
+
+* **Multiplexing Logic:** Read inbound JSONL streams, parse the `id`, and route the responses to the awaiting caller via channels or stream iterators.
 
 ---
 
@@ -142,6 +182,7 @@ The project is a Cargo Workspace. All internal crates reside in `crates/`.
 * **Lockfile:** Track `Cargo.lock` in git.
 * **Runtime:** `smol` or `async-std` ONLY. No `tokio`.
 * **Hooks:** Ensure a `.git/hooks/pre-push` script exists that runs `cargo test` at the workspace root.
+* **Dependencies:** Support standard async TCP/UDS listeners in `ogenius`. Use `smol::process` for the `thinkerv1-client` command transport.
 
 
 2. **Sandbox Isolation:**
@@ -161,56 +202,65 @@ The project is a Cargo Workspace. All internal crates reside in `crates/`.
 **Execution Directive:** Automate commands. Interrupt only on blocking errors.
 
 * **Turn 1: Workspace Initialization**
-* Init workspace, `Cargo.toml`, `.gitignore`.
-* Write `pre-push` hook.
+* Init workspace, `Cargo.toml`, `.gitignore`. Write `pre-push` hook.
 * **Commit:** `chore: init workspace and hooks`
 
 
-* **Turn 2: Protocol (Core)**
-* Implement `rusty-genius-core`.
-* **Commit:** `feat(core): protocol and errors`
+* **Turn 2: Protocol Schemas (Thinkerv1)**
+* Implement `rusty-genius-thinkerv1` containing the JSONL message definitions with `id`.
+* Ensure `inference_config` and `model_config` are highly optional, with TTL support (`-1` for infinite).
+* **Commit:** `feat(thinkerv1): implement thinkerv1 request and response schemas (nd-json)`
 
 
-* **Turn 3: Assets (Facecrab)**
+* **Turn 3: Protocol Client (Thinkerv1 Client)**
+* Implement `rusty-genius-thinkerv1-client` using `smol` to support TCP, UDS, and Command transports.
+* **Commit:** `feat(client): implement smol-based thinkerv1 client with multiplexing`
+
+
+* **Turn 4: Internal Logic (Core)**
+* Implement `rusty-genius-core`. Create `BrainstemInput` and `BrainstemOutput` structures wrapping events and `id`. Use the `thinkerv1` types where appropriate.
+* **Commit:** `feat(core): core types, wrapped brainstem io, and errors`
+
+
+* **Turn 5: Assets (Facecrab)**
 * Implement `facecrab` (surf/smol).
 * **Commit:** `feat(facecrab): asset registry`
 
 
-* **Turn 4: Engine (Cortex)**
+* **Turn 6: Engine (Cortex)**
 * Implement `rusty-genius-cortex` (Stub + Real).
 * **Commit:** `feat(cortex): engine backends`
 
 
-* **Turn 5: Orchestration (Brainstem)**
+* **Turn 7: Orchestration (Brainstem)**
 * Implement `rusty-genius-stem`.
 * **Commit:** `feat(stem): orchestrator`
 
 
-* **Turn 6: Facade (Genius)**
+* **Turn 8: Facade (Genius)**
 * Implement `rusty-genius` lib.
 * **Commit:** `feat(genius): public facade`
 
 
-* **Turn 7: Interface (Ogenius)**
-* Implement `ogenius` CLI with `download`, `chat`, and `serve`.
-* Add `tide-websockets` support.
-* Embed `index.html` (Chat GUI).
-* Implement Cold Start logic and logging.
-* **Commit:** `feat(ogenius): cli, api, ws, and web ui`
+* **Turn 9: Interface (Ogenius)**
+* Implement `ogenius` CLI (`download`, `chat`, `serve`).
+* Implement `tide` API, WS UI, and Cold Start logic.
+* Implement the `thinkerv1` listener over TCP/UDS reading/writing JSONL and correlating `BrainstemOutput`.
+* **Commit:** `feat(ogenius): cli, web api, ui, and thinkerv1 jsonl protocol`
 
 
-* **Turn 8: QA (Brainteaser)**
+* **Turn 10: QA (Brainteaser)**
 * Implement test harness and generate fixtures.
 * Create `pinky.sh` and `metal.sh`.
 * **Commit:** `test(teaser): fixtures and scripts`
 
 
-* **Turn 9: Intermediate Validation**
+* **Turn 11: Intermediate Validation**
 * Execute `./scripts/pinky.sh`.
 * **Commit:** `test: verify pinky pipeline`
 
 
-* **Turn 10: Final Validation**
+* **Turn 12: Final Validation**
 * Execute `./scripts/metal.sh`.
 * **Commit:** `test: verify real metal pipeline`
 
@@ -224,8 +274,10 @@ If automated execution fails, instruct user:
 
 1. Run `./scripts/metal.sh` to verify library.
 2. Run `ogenius download Qwen/Qwen2.5-1.5B-Instruct`.
-3. Run `ogenius serve --addr 127.0.0.1:8080 --ws-addr 127.0.0.1:8081`.
-4. Open `http://127.0.0.1:8080` in a browser to test the Chat GUI.
+3. Run `ogenius serve --addr 127.0.0.1:8080 --ws-addr 127.0.0.1:8081 --thinker-addr unix:/tmp/thinker.sock`.
+4. Open `http://127.0.0.1:8080` to test the Web UI, or connect via the `thinkerv1-client` library.
+
+---
 
 ### **Next Step:**
 
