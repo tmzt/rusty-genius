@@ -1,4 +1,5 @@
 pub use crate::manifest::InferenceConfig;
+use crate::memory::{MemoryObject, MemoryObjectType};
 use serde::{Deserialize, Serialize};
 
 // ── Context protocol types ──
@@ -104,5 +105,55 @@ pub enum BrainstemBody {
     /// List of available models
     ModelList(Vec<ModelDescriptor>),
     /// Catch-all for engine or orchestrator errors
+    Error(String),
+}
+
+// ── Memory protocol types ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryInput {
+    pub id: Option<String>,
+    pub command: MemoryCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MemoryCommand {
+    Store(MemoryObject),
+    Recall {
+        query: String,
+        limit: usize,
+        object_type: Option<MemoryObjectType>,
+    },
+    RecallByVector {
+        embedding: Vec<f32>,
+        limit: usize,
+        object_type: Option<MemoryObjectType>,
+    },
+    Get {
+        object_id: String,
+    },
+    Forget {
+        object_id: String,
+    },
+    ListByType {
+        object_type: MemoryObjectType,
+    },
+    /// Consolidate PFC → Neocortex
+    Ship,
+    Stop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryOutput {
+    pub id: Option<String>,
+    pub body: MemoryBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MemoryBody {
+    Stored(String),
+    Recalled(Vec<MemoryObject>),
+    Object(Option<MemoryObject>),
+    Ack,
     Error(String),
 }

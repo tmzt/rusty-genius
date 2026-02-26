@@ -4,6 +4,8 @@ members = [
     "crates/facecrab",
     "crates/cortex",
     "crates/brainstem",
+    "crates/pfc",
+    "crates/neocortex",
     "crates/genius",
     "crates/brainteaser",
     "crates/ogenius",

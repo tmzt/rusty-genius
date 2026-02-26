@@ -14,6 +14,9 @@ pub enum GeniusError {
     #[error("Engine Error: {0}")]
     EngineError(String),
 
+    #[error("Memory Error: {0}")]
+    MemoryError(String),
+
     #[error("Unknown Error: {0}")]
     Unknown(String),
 }

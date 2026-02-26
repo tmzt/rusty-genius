@@ -22,6 +22,8 @@ futures-timer = "3"
 wasmtime = { version = "42", optional = true }
 wasmtime-wasi = { version = "42", optional = true }
 redis = { version = "1.0", features = ["smol-comp"], optional = true }
+rusty-genius-pfc = { path = "../pfc", version = "0.1.3", optional = true }
+rusty-genius-neocortex = { path = "../neocortex", version = "0.1.3", optional = true }
 
 [dev-dependencies]
 smol = "2"
@@ -31,3 +33,5 @@ default = ["cortex-engine"]
 cortex-engine = ["dep:rusty-genius-cortex", "dep:facecrab"]
 wllama = ["dep:wasmtime", "dep:wasmtime-wasi"]
 redis-context = ["dep:redis"]
+pfc = ["dep:rusty-genius-pfc"]
+neocortex = ["dep:rusty-genius-neocortex"]

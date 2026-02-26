@@ -1,10 +1,12 @@
 pub mod context_worker;
+pub mod embedder;
 #[cfg(feature = "redis-context")]
 pub mod redis_store;
 #[cfg(feature = "wllama")]
 pub mod engine_wllama;
 
 pub use context_worker::ContextWorker;
+pub use embedder::BrainstemEmbedder;
 #[cfg(feature = "redis-context")]
 pub use redis_store::RedisContextStore;
 #[cfg(feature = "wllama")]
