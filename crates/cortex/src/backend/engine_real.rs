@@ -2,7 +2,6 @@
 
 use rusty_genius_core::engine::Engine;
 use anyhow::{anyhow, Result};
-use async_std::task;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
@@ -90,7 +89,7 @@ impl Engine for Brain {
         let prompt_str = prompt.to_string();
         let (mut tx, rx) = mpsc::channel(100);
 
-        task::spawn_blocking(move || {
+        smol::spawn(smol::unblock(move || {
             // Send ProcessStart
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::ProcessStart)));
 
@@ -179,8 +178,6 @@ impl Engine for Brain {
                             tx.send(Ok(InferenceEvent::Thought(ThoughtEvent::Start))),
                         );
 
-                        // If there was content before <think>, we should emit it?
-                        // For simplicity assuming distinct blocks or just consuming tag.
                         // Remove <think> from buffer to find remainder
                         token_str_buffer = token_str_buffer.replace("<think>", "");
                     }
@@ -246,7 +243,8 @@ impl Engine for Brain {
             }
 
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Complete)));
-        });
+        }))
+        .detach();
 
         Ok(rx)
     }
@@ -266,7 +264,7 @@ impl Engine for Brain {
         let input_str = input.to_string();
         let (mut tx, rx) = mpsc::channel(100);
 
-        task::spawn_blocking(move || {
+        smol::spawn(smol::unblock(move || {
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::ProcessStart)));
 
             let backend_ref = &backend;
@@ -312,8 +310,6 @@ impl Engine for Brain {
             }
 
             // Extract embeddings from the context
-            // The embeddings are typically available after decode
-            // Extract embeddings from the context
             let embeddings = match ctx.embeddings_seq_ith(0) {
                 Ok(e) => e.to_vec(),
                 Err(e) => {
@@ -326,7 +322,8 @@ impl Engine for Brain {
 
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Embedding(embeddings))));
             let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::Complete)));
-        });
+        }))
+        .detach();
 
         Ok(rx)
     }

@@ -5,8 +5,10 @@ members = [
     "crates/cortex",
     "crates/brainstem",
     "crates/genius",
-    "crates/brainteaser"
-, "crates/ogenius"]
+    "crates/brainteaser",
+    "crates/ogenius",
+]
+exclude = ["crates/wasm-guest"]
 default-members = ["crates/genius"]
 resolver = "2"
 

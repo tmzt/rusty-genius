@@ -66,6 +66,18 @@ impl Orchestrator {
         })
     }
 
+    /// Create an Orchestrator with a pre-built engine (useful for testing).
+    pub fn with_engine(engine: Box<dyn Engine>) -> Self {
+        Self {
+            engine,
+            #[cfg(feature = "cortex-engine")]
+            asset_authority: AssetAuthority::new().expect("failed to create asset authority"),
+            strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
+            last_activity: Instant::now(),
+            last_model_name: None,
+        }
+    }
+
     pub fn set_strategy(&mut self, strategy: CortexStrategy) {
         self.strategy = strategy;
     }
@@ -97,9 +109,16 @@ impl Orchestrator {
             };
 
             let msg_option = if let Some(wait_time) = next_activity {
-                match async_std::future::timeout(wait_time, input_rx.next()).await {
-                    Ok(msg) => msg,
-                    Err(_) => {
+                use futures::future::{self, Either};
+                use futures_timer::Delay;
+
+                let delay = Delay::new(wait_time);
+                futures::pin_mut!(delay);
+                let next = input_rx.next();
+                futures::pin_mut!(next);
+                match future::select(next, delay).await {
+                    Either::Left((msg, _)) => msg,
+                    Either::Right((_, _)) => {
                         continue;
                     }
                 }
