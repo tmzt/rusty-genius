@@ -1,3 +1,11 @@
+pub mod context_worker;
+#[cfg(feature = "redis-context")]
+pub mod redis_store;
+
+pub use context_worker::ContextWorker;
+#[cfg(feature = "redis-context")]
+pub use redis_store::RedisContextStore;
+
 use anyhow::Result;
 use facecrab::AssetAuthority;
 use futures::channel::mpsc;

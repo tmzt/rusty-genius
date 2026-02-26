@@ -1,6 +1,37 @@
 pub use crate::manifest::InferenceConfig;
 use serde::{Deserialize, Serialize};
 
+// ── Context protocol types ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextInput {
+    pub id: Option<String>,
+    pub command: ContextCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ContextCommand {
+    Set { key: String, value: String },
+    Get { key: String },
+    Delete { key: String },
+    ListKeys { pattern: String },
+    FlushAll,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextOutput {
+    pub id: Option<String>,
+    pub body: ContextBody,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ContextBody {
+    Value(Option<String>),
+    Keys(Vec<String>),
+    Ack,
+    Error(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InferenceEvent {
     ProcessStart,
