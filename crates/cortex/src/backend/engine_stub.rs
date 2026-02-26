@@ -1,6 +1,6 @@
 #![cfg(not(feature = "real-engine"))]
 
-use crate::Engine;
+use rusty_genius_core::engine::Engine;
 use anyhow::{anyhow, Result};
 use async_std::task;
 use async_trait::async_trait;

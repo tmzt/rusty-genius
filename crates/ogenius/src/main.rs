@@ -12,13 +12,15 @@ use colored::*;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
+#[cfg(feature = "cortex-engine")]
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rusty_genius_core::protocol::{
-    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ContextInput,
-    ContextOutput, InferenceConfig, InferenceEvent,
+    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ContextOutput,
+    InferenceConfig, InferenceEvent,
 };
 use rusty_genius_core::InMemoryContextStore;
 use rusty_genius_stem::{ContextWorker, Orchestrator};
+#[cfg(feature = "cortex-engine")]
 use std::io::IsTerminal;
 use std::io::{self, Write};
 use std::process;
@@ -107,6 +109,7 @@ enum Commands {
 }
 
 /// Pre-load and verify models in parallel with progress tracking
+#[cfg(feature = "cortex-engine")]
 async fn wait_for_models(load_models: Vec<String>) -> Result<()> {
     if load_models.is_empty() {
         return Ok(());
@@ -208,6 +211,14 @@ async fn wait_for_models(load_models: Vec<String>) -> Result<()> {
         anyhow::bail!("Failed to load some models");
     }
     println!("✨ All models loaded.\n");
+    Ok(())
+}
+
+#[cfg(not(feature = "cortex-engine"))]
+async fn wait_for_models(load_models: Vec<String>) -> Result<()> {
+    if !load_models.is_empty() {
+        eprintln!("⚠️  Model pre-loading is not available without cortex-engine feature");
+    }
     Ok(())
 }
 

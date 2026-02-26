@@ -2348,8 +2348,10 @@ dependencies = [
 name = "rusty-genius-core"
 version = "0.1.3"
 dependencies = [
+ "anyhow",
  "async-std",
  "async-trait",
+ "futures-channel",
  "serde",
  "thiserror",
 ]

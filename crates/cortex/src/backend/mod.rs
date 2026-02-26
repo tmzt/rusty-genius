@@ -1,7 +1,7 @@
 mod engine_real;
 mod engine_stub;
 
-pub use crate::Engine;
+pub use rusty_genius_core::engine::Engine;
 
 #[cfg(feature = "real-engine")]
 pub use engine_real::Brain;
