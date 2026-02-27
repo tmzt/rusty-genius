@@ -174,7 +174,8 @@ impl RedisMemoryStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl MemoryStore for RedisMemoryStore {
     async fn store(&self, object: MemoryObject) -> Result<String, GeniusError> {
         let mut conn = self.connection.clone();

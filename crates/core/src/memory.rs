@@ -55,7 +55,8 @@ pub struct MemoryObject {
 
 // ── Traits ──
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait MemoryStore: Send + Sync {
     async fn store(&self, object: MemoryObject) -> Result<String, GeniusError>;
 
@@ -88,7 +89,8 @@ pub trait MemoryStore: Send + Sync {
     async fn flush_all(&self) -> Result<(), GeniusError>;
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 pub trait EmbeddingProvider: Send + Sync {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, GeniusError>;
 }
@@ -139,7 +141,8 @@ fn type_tag(object_type: &MemoryObjectType) -> String {
     format!("{:?}", object_type)
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl MemoryStore for InMemoryMemoryStore {
     async fn store(&self, object: MemoryObject) -> Result<String, GeniusError> {
         let id = object.id.clone();
@@ -339,7 +342,8 @@ impl Default for MockEmbeddingProvider {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl EmbeddingProvider for MockEmbeddingProvider {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, GeniusError> {
         Ok(self.embed_sync(text))

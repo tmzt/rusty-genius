@@ -196,7 +196,8 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl MemoryStore for SqliteMemoryStore {
     async fn store(&self, object: MemoryObject) -> Result<String, GeniusError> {
         let type_json = Self::type_json(&object.object_type);
