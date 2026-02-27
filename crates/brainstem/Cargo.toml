@@ -32,6 +32,7 @@ smol = "2"
 default = ["cortex-engine"]
 cortex-engine = ["dep:rusty-genius-cortex", "dep:facecrab"]
 wllama = ["dep:wasmtime", "dep:wasmtime-wasi"]
+genai = ["rusty-genius-cortex/genai", "cortex-engine"]
 redis-context = ["dep:redis"]
 pfc = ["dep:rusty-genius-pfc"]
 neocortex = ["dep:rusty-genius-neocortex"]
