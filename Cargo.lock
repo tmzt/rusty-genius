@@ -3351,6 +3351,7 @@ dependencies = [
  "async-trait",
  "futures-channel",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
 ]
 
@@ -3371,9 +3372,11 @@ name = "rusty-genius-neocortex"
 version = "0.1.3"
 dependencies = [
  "anyhow",
+ "async-std",
  "async-trait",
  "futures",
  "rusty-genius-core",
+ "rusty-genius-pfc",
  "serde",
  "serde_json",
  "sqlite-vec",
@@ -3385,6 +3388,7 @@ name = "rusty-genius-pfc"
 version = "0.1.3"
 dependencies = [
  "anyhow",
+ "async-std",
  "async-trait",
  "futures",
  "redis",

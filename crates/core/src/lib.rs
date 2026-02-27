@@ -8,4 +8,7 @@ pub mod protocol;
 pub use context::{ContextStore, InMemoryContextStore};
 pub use engine::Engine;
 pub use error::GeniusError;
-pub use memory::{EmbeddingProvider, MemoryObject, MemoryObjectType, MemoryStore};
+pub use memory::{
+    EmbeddingProvider, InMemoryMemoryStore, MemoryObject, MemoryObjectType, MemoryStore,
+    MockEmbeddingProvider,
+};
