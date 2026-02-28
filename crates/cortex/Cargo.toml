@@ -14,13 +14,19 @@ publish.workspace = true
 [dependencies]
 rusty-genius-core = { path = "../core", version = "0.1.3" }
 anyhow = "1.0"
-async-std = { version = "1.12", features = ["attributes"] }
+smol = "2"
 futures = "0.3"
 async-trait = "0.1"
-llama-cpp-2 = { version = "=0.1.132", optional = true, features = ["sampler"] } 
-# Note: assuming llama-cpp-2 version. In a real scenario I'd check crates.io or use a git dep if needed. 
-# For this exercise, I'll assume 0.1 is fine or just rely on the user's environment / mock if it fails.
-# Actually, the user prompt says "llama-cpp-2 must be optional".
+llama-cpp-2 = { version = "=0.1.132", optional = true, features = ["sampler"] }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+
+# surf backend is target-conditional: native uses h1-client-rustls, WASM uses wasm-client
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+surf = { version = "2", optional = true, default-features = false, features = ["h1-client-rustls"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+surf = { version = "2", optional = true, default-features = false, features = ["wasm-client"] }
 
 [features]
 default = []
@@ -28,3 +34,9 @@ real-engine = ["dep:llama-cpp-2"]
 metal = ["llama-cpp-2/metal", "real-engine"]
 cuda = ["llama-cpp-2/cuda", "real-engine"]
 vulkan = ["llama-cpp-2/vulkan", "real-engine"]
+genai = ["dep:surf", "dep:serde", "dep:serde_json"]
+
+[dev-dependencies]
+smol-potat = "1"
+serde_json = "1.0"
+async-std = { version = "1.12", features = ["attributes"] }

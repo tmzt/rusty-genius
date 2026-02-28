@@ -1,4 +1,4 @@
-.PHONY: ogenius_tests ogenius_metal
+.PHONY: ogenius_tests ogenius_metal wasm-guest wllama-tests
 
 # Use local tmp for sandboxed builds
 export TMPDIR := $(shell pwd)/target/tmp
@@ -23,3 +23,9 @@ ogenius_embed: ogenius_metal
 
 ogenius_inference: ogenius_metal
 	TEST_BINARY=$(TARGET_DIR)/ogenius-metal cargo run --package ogenius --bin inference_test -- --load-models "tiny-model"
+
+wasm-guest:
+	cd crates/wasm-guest && cargo build --target wasm32-wasip1 --release --target-dir ../../target
+
+wllama-tests: wasm-guest
+	cargo test -p rusty-genius-stem --no-default-features --features rusty-genius-stem/wllama -- wllama

@@ -5,14 +5,18 @@ use futures::sink::SinkExt;
 use futures::StreamExt;
 use rusty_genius_core::manifest::InferenceConfig;
 use rusty_genius_core::protocol::{
-    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, InferenceEvent,
+    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ContextInput, ContextOutput,
+    InferenceEvent,
 };
-use rusty_genius_stem::Orchestrator;
+use rusty_genius_core::InMemoryContextStore;
+use rusty_genius_stem::{ContextWorker, Orchestrator};
 use std::sync::Arc;
 
 pub struct Genius {
     input_tx: mpsc::Sender<BrainstemInput>,
     output_rx: Arc<Mutex<mpsc::Receiver<BrainstemOutput>>>,
+    context_tx: mpsc::Sender<ContextInput>,
+    context_rx: Arc<Mutex<mpsc::Receiver<ContextOutput>>>,
 }
 
 impl Genius {
@@ -22,17 +26,64 @@ impl Genius {
 
         let mut orchestrator = Orchestrator::new().await?;
 
-        // Spawn the brainstem
+        // Spawn the brainstem orchestrator
         async_std::task::spawn(async move {
             if let Err(e) = orchestrator.run(input_rx, output_tx).await {
                 eprintln!("Orchestrator error: {}", e);
             }
         });
 
+        // Set up context worker
+        let (context_tx, context_input_rx) = mpsc::channel(100);
+        let (context_output_tx, context_rx) = mpsc::channel(100);
+
+        let store: Box<dyn rusty_genius_core::context::ContextStore> = Self::create_store().await?;
+        let worker = ContextWorker::new(store);
+
+        async_std::task::spawn(async move {
+            worker.run(context_input_rx, context_output_tx).await;
+        });
+
         Ok(Self {
             input_tx,
             output_rx: Arc::new(Mutex::new(output_rx)),
+            context_tx,
+            context_rx: Arc::new(Mutex::new(context_rx)),
         })
+    }
+
+    #[cfg(feature = "redis-context")]
+    async fn create_store() -> Result<Box<dyn rusty_genius_core::context::ContextStore>> {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_string());
+        let prefix = std::env::var("REDIS_CONTEXT_PREFIX").ok();
+        match rusty_genius_stem::RedisContextStore::new(&url, prefix).await {
+            Ok(store) => Ok(Box::new(store)),
+            Err(e) => {
+                eprintln!(
+                    "WARN: Failed to connect to Redis ({}), falling back to in-memory store",
+                    e
+                );
+                Ok(Box::new(InMemoryContextStore::new()))
+            }
+        }
+    }
+
+    #[cfg(not(feature = "redis-context"))]
+    async fn create_store() -> Result<Box<dyn rusty_genius_core::context::ContextStore>> {
+        Ok(Box::new(InMemoryContextStore::new()))
+    }
+
+    pub fn context_sender(&self) -> mpsc::Sender<ContextInput> {
+        self.context_tx.clone()
+    }
+
+    pub fn context_receiver(&self) -> Arc<Mutex<mpsc::Receiver<ContextOutput>>> {
+        self.context_rx.clone()
+    }
+
+    pub async fn context_send(&mut self, input: ContextInput) -> Result<()> {
+        self.context_tx.send(input).await?;
+        Ok(())
     }
 
     pub async fn infer(

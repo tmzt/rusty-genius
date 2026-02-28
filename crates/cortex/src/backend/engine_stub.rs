@@ -1,8 +1,7 @@
 #![cfg(not(feature = "real-engine"))]
 
-use crate::Engine;
+use rusty_genius_core::engine::Engine;
 use anyhow::{anyhow, Result};
-use async_std::task;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
@@ -24,8 +23,7 @@ impl Pinky {
 #[async_trait]
 impl Engine for Pinky {
     async fn load_model(&mut self, _model_path: &str) -> Result<()> {
-        // Simulate loading time
-        task::sleep(Duration::from_millis(100)).await;
+        smol::Timer::after(Duration::from_millis(100)).await;
         self.model_loaded = true;
         Ok(())
     }
@@ -55,9 +53,9 @@ impl Engine for Pinky {
         let (mut tx, rx) = mpsc::channel(100);
         let prompt_owned = prompt.to_string();
         eprintln!("DEBUG: Pinky::infer prompt: {}", prompt_owned);
-        task::spawn(async move {
+        smol::spawn(async move {
             let _ = tx.send(Ok(InferenceEvent::ProcessStart)).await;
-            task::sleep(Duration::from_millis(50)).await;
+            smol::Timer::after(Duration::from_millis(50)).await;
 
             // Emit a "thought"
             let _ = tx
@@ -68,7 +66,7 @@ impl Engine for Pinky {
                     "Narf!".to_string(),
                 ))))
                 .await;
-            task::sleep(Duration::from_millis(50)).await;
+            smol::Timer::after(Duration::from_millis(50)).await;
             let _ = tx
                 .send(Ok(InferenceEvent::Thought(ThoughtEvent::Stop)))
                 .await;
@@ -82,7 +80,8 @@ impl Engine for Pinky {
                 .await;
 
             let _ = tx.send(Ok(InferenceEvent::Complete)).await;
-        });
+        })
+        .detach();
 
         Ok(rx)
     }
@@ -99,16 +98,17 @@ impl Engine for Pinky {
         let (mut tx, rx) = mpsc::channel(100);
         let input_owned = input.to_string();
         eprintln!("DEBUG: Pinky::embed input: {}", input_owned);
-        task::spawn(async move {
+        smol::spawn(async move {
             let _ = tx.send(Ok(InferenceEvent::ProcessStart)).await;
-            task::sleep(Duration::from_millis(50)).await;
+            smol::Timer::after(Duration::from_millis(50)).await;
 
             // Generate a simple mock embedding (384 dimensions with random-ish values)
             let mock_embedding: Vec<f32> = (0..384).map(|i| (i as f32 * 0.01).sin()).collect();
 
             let _ = tx.send(Ok(InferenceEvent::Embedding(mock_embedding))).await;
             let _ = tx.send(Ok(InferenceEvent::Complete)).await;
-        });
+        })
+        .detach();
 
         Ok(rx)
     }
