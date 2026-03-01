@@ -1,11 +1,11 @@
 [package]
-name = "rusty-genius-pfc"
+name = "rusty-genius-striatum"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Short-term memory (PFC) for rusty-genius"
+description = "Redis-backed memory search and indexing for rusty-genius"
 readme = "../../README.md"
 keywords.workspace = true
 categories.workspace = true
@@ -13,10 +13,10 @@ publish.workspace = true
 
 [dependencies]
 rusty-genius-core = { path = "../core", version = "0.1.3" }
-rusty-genius-striatum = { path = "../striatum", version = "0.1.3" }
-anyhow = "1.0"
 async-trait = "0.1"
-futures = "0.3"
+redis = { version = "1.0", features = ["smol-comp", "script"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
-async-std = { version = "1.12", features = ["attributes"] }
+smol = "2"

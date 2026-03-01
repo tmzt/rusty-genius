@@ -1,7 +1,8 @@
-pub mod bootstrap;
-pub mod store;
-
-pub use store::RedisMemoryStore;
+// Redis store and bootstrap logic live in the `striatum` crate.
+// Re-export for backward compatibility.
+pub use rusty_genius_striatum::bootstrap;
+pub use rusty_genius_striatum::store;
+pub use rusty_genius_striatum::RedisMemoryStore;
 
 use futures::channel::mpsc;
 use futures::sink::SinkExt;

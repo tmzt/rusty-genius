@@ -22,14 +22,15 @@ impl RedisMemoryStore {
             .map_err(|e| GeniusError::MemoryError(format!("Redis connection error: {}", e)))?;
 
         let capabilities = bootstrap::detect_capabilities(&mut connection).await;
+        let prefix = prefix.unwrap_or_else(|| "pfc".to_string());
 
         if capabilities.has_redisearch {
-            bootstrap::create_redisearch_index(&mut connection).await?;
+            bootstrap::create_redisearch_index(&mut connection, &prefix).await?;
         }
 
         Ok(Self {
             connection,
-            prefix: prefix.unwrap_or_else(|| "pfc".to_string()),
+            prefix,
             capabilities,
             cosine_script: redis::Script::new(LUA_COSINE_SEARCH),
         })

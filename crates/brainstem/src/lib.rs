@@ -27,6 +27,11 @@ use facecrab::AssetAuthority;
 #[cfg(feature = "cortex-engine")]
 use rusty_genius_core::protocol::AssetEvent;
 
+#[cfg(not(any(feature = "cortex-engine", feature = "wllama")))]
+compile_error!(
+    "rusty-genius-stem requires at least one engine feature: `cortex-engine` or `wllama`"
+);
+
 #[derive(Debug, Clone)]
 pub enum CortexStrategy {
     Immediate,

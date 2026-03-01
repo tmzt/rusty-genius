@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Row, SqlitePool};
 
-use crate::cosine::cosine_similarity;
+use rusty_genius_core::cosine::cosine_similarity;
 use crate::error::GyrusError;
 use crate::schema;
 use crate::traits::MemoryStore;

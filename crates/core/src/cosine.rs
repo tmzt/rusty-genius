@@ -1,5 +1,7 @@
-/// Cosine similarity between two vectors. Returns 0.0 on mismatched lengths or
-/// empty inputs. Pure Rust — no SIMD, no alloc — suitable for WASM.
+/// Cosine similarity between two vectors.
+///
+/// Returns 0.0 for empty or mismatched-length vectors.
+/// Pure Rust — no SIMD, no alloc — suitable for WASM.
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;

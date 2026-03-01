@@ -1,4 +1,3 @@
-pub mod cosine;
 pub mod fts;
 pub mod idb;
 pub mod schema;

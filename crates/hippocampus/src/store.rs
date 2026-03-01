@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use rusty_genius_core::error::GeniusError;
 use rusty_genius_core::memory::{MemoryObject, MemoryObjectType, MemoryStore};
 
-use crate::cosine::cosine_similarity;
+use rusty_genius_core::cosine::cosine_similarity;
 use crate::fts::FtsIndex;
 use crate::idb::ContentStore;
 use crate::wrapper::WasmSendSync;

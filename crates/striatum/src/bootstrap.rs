@@ -6,7 +6,7 @@ pub struct RedisCapabilities {
     pub has_redisearch: bool,
 }
 
-/// Lua script for brute-force cosine similarity over `pfc:vec:*` keys.
+/// Lua script for brute-force cosine similarity over `{prefix}:vec:*` keys.
 /// KEYS[1] = prefix (e.g. "pfc")
 /// ARGV[1] = JSON-encoded query vector
 /// ARGV[2] = limit
@@ -53,13 +53,17 @@ pub async fn detect_capabilities(
     RedisCapabilities { has_redisearch }
 }
 
-/// Create FTS index on `pfc:obj:*` hashes if RediSearch is available.
+/// Create FTS index on `{prefix}:obj:*` hashes if RediSearch is available.
 pub async fn create_redisearch_index(
     conn: &mut redis::aio::MultiplexedConnection,
+    prefix: &str,
 ) -> Result<(), GeniusError> {
+    let idx_name = format!("{}:idx", prefix);
+    let obj_prefix = format!("{}:obj:", prefix);
+
     // Check if index already exists
     let exists: Result<redis::Value, _> = redis::cmd("FT.INFO")
-        .arg("pfc:idx")
+        .arg(&idx_name)
         .query_async(conn)
         .await;
     if exists.is_ok() {
@@ -67,12 +71,12 @@ pub async fn create_redisearch_index(
     }
 
     redis::cmd("FT.CREATE")
-        .arg("pfc:idx")
+        .arg(&idx_name)
         .arg("ON")
         .arg("HASH")
         .arg("PREFIX")
         .arg("1")
-        .arg("pfc:obj:")
+        .arg(&obj_prefix)
         .arg("SCHEMA")
         .arg("short_name")
         .arg("TEXT")

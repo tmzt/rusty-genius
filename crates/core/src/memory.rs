@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+use crate::cosine::cosine_similarity;
 use crate::error::GeniusError;
 
 // ── Memory object types ──
@@ -114,24 +115,6 @@ impl InMemoryMemoryStore {
 impl Default for InMemoryMemoryStore {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Cosine similarity between two vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let (mut dot, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-    if na > 0.0 && nb > 0.0 {
-        dot / (na.sqrt() * nb.sqrt())
-    } else {
-        0.0
     }
 }
 

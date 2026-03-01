@@ -5,6 +5,7 @@ members = [
     "crates/cortex",
     "crates/brainstem",
     "crates/pfc",
+    "crates/striatum",
     "crates/neocortex",
     "crates/gyrus",
     "crates/hippocampus",

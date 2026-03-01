@@ -1,6 +1,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use futures_channel::mpsc;
+use futures::channel::mpsc;
 
 use crate::manifest::InferenceConfig;
 use crate::protocol::InferenceEvent;
