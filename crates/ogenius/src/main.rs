@@ -5,19 +5,22 @@
 mod api;
 
 use anyhow::Result;
-use api::{chat_completions, list_models, ApiState};
+use api::{chat_completions, context_chat, list_models, ApiState};
 use async_std::sync::Mutex;
 use clap::{Parser, Subcommand};
 use colored::*;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
+#[cfg(feature = "cortex-engine")]
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rusty_genius_core::protocol::{
-    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, InferenceConfig,
-    InferenceEvent,
+    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ContextOutput,
+    InferenceConfig, InferenceEvent,
 };
-use rusty_genius_stem::Orchestrator;
+use rusty_genius_core::InMemoryContextStore;
+use rusty_genius_stem::{ContextWorker, Orchestrator};
+#[cfg(feature = "cortex-engine")]
 use std::io::IsTerminal;
 use std::io::{self, Write};
 use std::process;
@@ -106,6 +109,7 @@ enum Commands {
 }
 
 /// Pre-load and verify models in parallel with progress tracking
+#[cfg(feature = "cortex-engine")]
 async fn wait_for_models(load_models: Vec<String>) -> Result<()> {
     if load_models.is_empty() {
         return Ok(());
@@ -207,6 +211,14 @@ async fn wait_for_models(load_models: Vec<String>) -> Result<()> {
         anyhow::bail!("Failed to load some models");
     }
     println!("✨ All models loaded.\n");
+    Ok(())
+}
+
+#[cfg(not(feature = "cortex-engine"))]
+async fn wait_for_models(load_models: Vec<String>) -> Result<()> {
+    if !load_models.is_empty() {
+        eprintln!("⚠️  Model pre-loading is not available without cortex-engine feature");
+    }
     Ok(())
 }
 
@@ -464,9 +476,18 @@ async fn main() -> anyhow::Result<()> {
             let broadcast_senders: Arc<Mutex<Vec<mpsc::Sender<BrainstemOutput>>>> =
                 Arc::new(Mutex::new(Vec::new()));
 
+            // Context worker channels
+            let (context_tx, context_input_rx) = mpsc::channel(500);
+            let (context_output_tx, mut context_output_rx) = mpsc::channel(500);
+
+            let context_broadcast_senders: Arc<Mutex<Vec<mpsc::Sender<ContextOutput>>>> =
+                Arc::new(Mutex::new(Vec::new()));
+
             let state = ApiState {
                 input_tx: input_tx.clone(),
                 output_senders: broadcast_senders.clone(),
+                context_tx: context_tx.clone(),
+                context_output_senders: context_broadcast_senders.clone(),
                 ws_addr: ws_addr.clone(),
             };
 
@@ -485,6 +506,55 @@ async fn main() -> anyhow::Result<()> {
                     let mut to_remove = Vec::new();
                     for (i, sender) in senders.iter_mut().enumerate() {
                         // Use try_send to avoid blocking the whole bridge if one client is slow
+                        if let Err(e) = sender.try_send(msg.clone()) {
+                            if e.is_disconnected() {
+                                to_remove.push(i);
+                            }
+                        }
+                    }
+                    for i in to_remove.into_iter().rev() {
+                        senders.remove(i);
+                    }
+                }
+            });
+
+            // Spawn context worker
+            let context_store: Box<dyn rusty_genius_core::context::ContextStore> = {
+                #[cfg(feature = "redis-context")]
+                {
+                    let url = std::env::var("REDIS_URL")
+                        .unwrap_or_else(|_| "redis://127.0.0.1/".to_string());
+                    let prefix = std::env::var("REDIS_CONTEXT_PREFIX").ok();
+                    match rusty_genius_stem::RedisContextStore::new(&url, prefix).await {
+                        Ok(store) => Box::new(store),
+                        Err(e) => {
+                            eprintln!(
+                                "WARN: Failed to connect to Redis ({}), falling back to in-memory store",
+                                e
+                            );
+                            Box::new(InMemoryContextStore::new())
+                        }
+                    }
+                }
+                #[cfg(not(feature = "redis-context"))]
+                {
+                    Box::new(InMemoryContextStore::new())
+                }
+            };
+            let context_worker = ContextWorker::new(context_store);
+            async_std::task::spawn(async move {
+                context_worker
+                    .run(context_input_rx, context_output_tx)
+                    .await;
+            });
+
+            // Context output bridge (same fan-out pattern as brainstem bridge)
+            let ctx_bridge_senders = context_broadcast_senders.clone();
+            async_std::task::spawn(async move {
+                while let Some(msg) = context_output_rx.next().await {
+                    let mut senders = ctx_bridge_senders.lock().await;
+                    let mut to_remove = Vec::new();
+                    for (i, sender) in senders.iter_mut().enumerate() {
                         if let Err(e) = sender.try_send(msg.clone()) {
                             if e.is_disconnected() {
                                 to_remove.push(i);
@@ -525,6 +595,7 @@ async fn main() -> anyhow::Result<()> {
 
             app.at("/v1/models").get(list_models);
             app.at("/v1/chat/completions").post(chat_completions);
+            app.at("/v1/context").post(context_chat);
             app.at("/v1/embeddings").post(api::embeddings);
             app.at("/v1/engine/reset").post(api::reset_engine);
             app.at("/v1/config").get(api::get_config);
