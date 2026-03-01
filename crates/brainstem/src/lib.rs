@@ -1,14 +1,14 @@
 pub mod context_worker;
 pub mod embedder;
+// Re-exported from striatum for backward compatibility; Redis access patterns
+// live in rusty-genius-striatum.
 #[cfg(feature = "redis-context")]
-pub mod redis_store;
+pub use rusty_genius_striatum::RedisContextStore;
 #[cfg(feature = "wllama")]
 pub mod engine_wllama;
 
 pub use context_worker::ContextWorker;
 pub use embedder::BrainstemEmbedder;
-#[cfg(feature = "redis-context")]
-pub use redis_store::RedisContextStore;
 #[cfg(feature = "wllama")]
 pub use engine_wllama::WllamaEngine;
 
