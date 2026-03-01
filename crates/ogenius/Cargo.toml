@@ -25,14 +25,14 @@ serde_json = "1.0"
 anyhow = "1.0"
 colored = "2.0"
 surf = "2.3"
-indicatif = "0.18.3"
+indicatif = { version = "0.18.3", optional = true }
 ctrlc = "3.5.1"
 
 [dev-dependencies]
 
 [features]
 default = ["cortex-engine"]
-cortex-engine = ["dep:facecrab", "rusty-genius/cortex-engine"]
+cortex-engine = ["dep:facecrab", "dep:indicatif", "rusty-genius/cortex-engine"]
 wllama-only = ["rusty-genius/wllama"]
 metal = ["rusty-genius/metal"]
 cuda = ["rusty-genius/cuda"]
