@@ -17,9 +17,9 @@ use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
 use rusty_genius_core::engine::Engine;
-use rusty_genius_core::protocol::{
-    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ModelDescriptor,
-};
+use rusty_genius_core::protocol::{BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput};
+#[cfg(feature = "cortex-engine")]
+use rusty_genius_core::protocol::ModelDescriptor;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "cortex-engine")]
