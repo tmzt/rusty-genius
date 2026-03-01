@@ -35,6 +35,7 @@ metal = ["llama-cpp-2/metal", "real-engine"]
 cuda = ["llama-cpp-2/cuda", "real-engine"]
 vulkan = ["llama-cpp-2/vulkan", "real-engine"]
 genai = ["dep:surf", "dep:serde", "dep:serde_json"]
+llamacpp = ["real-engine"]
 
 [dev-dependencies]
 smol-potat = "1"

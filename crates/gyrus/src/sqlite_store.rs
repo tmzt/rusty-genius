@@ -1,40 +1,39 @@
 use async_trait::async_trait;
-use rusty_genius_core::error::GeniusError;
-use rusty_genius_core::memory::{MemoryObject, MemoryObjectType, MemoryStore};
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Row, SqlitePool};
 
+use crate::cosine::cosine_similarity;
+use crate::error::GyrusError;
 use crate::schema;
+use crate::traits::MemoryStore;
+use crate::types::MemoryObject;
 
 pub struct SqliteMemoryStore {
     pool: SqlitePool,
 }
 
 impl SqliteMemoryStore {
-    pub async fn new(database_url: &str) -> Result<Self, GeniusError> {
+    pub async fn new(database_url: &str) -> Result<Self, GyrusError> {
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect(database_url)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("SQLite connection error: {}", e)))?;
+            .await?;
 
-        schema::init_db(&pool)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("Schema init error: {}", e)))?;
+        schema::init_db(&pool).await?;
 
         Ok(Self { pool })
     }
 
-    fn type_json(object_type: &MemoryObjectType) -> String {
-        serde_json::to_string(object_type).unwrap_or_else(|_| "\"Fact\"".to_string())
+    /// Create from an existing pool (useful for testing or shared connections).
+    pub async fn from_pool(pool: SqlitePool) -> Result<Self, GyrusError> {
+        schema::init_db(&pool).await?;
+        Ok(Self { pool })
     }
 
-    /// Store embedding in the appropriate table (vec0 or fallback).
-    async fn store_embedding(&self, id: &str, embedding: &[f32]) -> Result<(), GeniusError> {
+    async fn store_embedding(&self, id: &str, embedding: &[f32]) -> Result<(), GyrusError> {
         let vec_json = serde_json::to_string(embedding)
-            .map_err(|e| GeniusError::MemoryError(format!("Serialize vec error: {}", e)))?;
+            .map_err(|e| GyrusError::Serialization(format!("Serialize vec error: {}", e)))?;
 
-        // Delete existing entry first
         #[cfg(feature = "vec0")]
         {
             let _ = sqlx::query("DELETE FROM memory_vec WHERE id = ?")
@@ -45,10 +44,7 @@ impl SqliteMemoryStore {
                 .bind(id)
                 .bind(&vec_json)
                 .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    GeniusError::MemoryError(format!("INSERT memory_vec error: {}", e))
-                })?;
+                .await?;
         }
 
         #[cfg(not(feature = "vec0"))]
@@ -59,16 +55,12 @@ impl SqliteMemoryStore {
             .bind(id)
             .bind(&vec_json)
             .execute(&self.pool)
-            .await
-            .map_err(|e| {
-                GeniusError::MemoryError(format!("INSERT memory_embeddings error: {}", e))
-            })?;
+            .await?;
         }
 
         Ok(())
     }
 
-    /// Load embedding for a given object ID.
     async fn load_embedding(&self, id: &str) -> Option<Vec<f32>> {
         #[cfg(feature = "vec0")]
         let table = "memory_vec";
@@ -88,8 +80,7 @@ impl SqliteMemoryStore {
             })
     }
 
-    /// Delete embedding for a given object ID.
-    async fn delete_embedding(&self, id: &str) -> Result<(), GeniusError> {
+    async fn delete_embedding(&self, id: &str) -> Result<(), GyrusError> {
         #[cfg(feature = "vec0")]
         let table = "memory_vec";
         #[cfg(not(feature = "vec0"))]
@@ -99,21 +90,19 @@ impl SqliteMemoryStore {
         sqlx::query(&query)
             .bind(id)
             .execute(&self.pool)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("DELETE embedding error: {}", e)))?;
+            .await?;
 
         Ok(())
     }
 
-    /// Vector search using vec0 extension.
     #[cfg(feature = "vec0")]
     async fn vector_search(
         &self,
         embedding: &[f32],
         limit: usize,
-    ) -> Result<Vec<String>, GeniusError> {
+    ) -> Result<Vec<String>, GyrusError> {
         let vec_json = serde_json::to_string(embedding)
-            .map_err(|e| GeniusError::MemoryError(format!("Serialize query vec: {}", e)))?;
+            .map_err(|e| GyrusError::Serialization(format!("Serialize query vec: {}", e)))?;
 
         let rows = sqlx::query(
             "SELECT id, distance FROM memory_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
@@ -121,23 +110,20 @@ impl SqliteMemoryStore {
         .bind(&vec_json)
         .bind(limit as i64)
         .fetch_all(&self.pool)
-        .await
-        .map_err(|e| GeniusError::MemoryError(format!("Vec0 search error: {}", e)))?;
+        .await?;
 
         Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
     }
 
-    /// Fallback vector search: load all embeddings and compute cosine similarity in Rust.
     #[cfg(not(feature = "vec0"))]
     async fn vector_search(
         &self,
         embedding: &[f32],
         limit: usize,
-    ) -> Result<Vec<String>, GeniusError> {
+    ) -> Result<Vec<String>, GyrusError> {
         let rows = sqlx::query("SELECT id, embedding FROM memory_embeddings")
             .fetch_all(&self.pool)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("SELECT embeddings error: {}", e)))?;
+            .await?;
 
         let mut scored: Vec<(String, f32)> = Vec::new();
         for row in &rows {
@@ -154,17 +140,13 @@ impl SqliteMemoryStore {
         Ok(scored.into_iter().map(|(id, _)| id).collect())
     }
 
-    fn row_to_object(row: &sqlx::sqlite::SqliteRow) -> Result<MemoryObject, GeniusError> {
-        let obj_type_str: String = row.get("object_type");
-        let object_type: MemoryObjectType = serde_json::from_str(&obj_type_str)
-            .map_err(|e| GeniusError::MemoryError(format!("Deserialize object_type: {}", e)))?;
-
+    fn row_to_object(row: &sqlx::sqlite::SqliteRow) -> Result<MemoryObject, GyrusError> {
         Ok(MemoryObject {
             id: row.get("id"),
             short_name: row.get("short_name"),
             long_name: row.get("long_name"),
             description: row.get("description"),
-            object_type,
+            object_type: row.get("object_type"),
             content: row.get("content"),
             embedding: None,
             metadata: row.get("metadata"),
@@ -175,33 +157,12 @@ impl SqliteMemoryStore {
     }
 }
 
-/// Cosine similarity between two vectors.
-#[cfg(not(feature = "vec0"))]
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0f32;
-    let mut na = 0.0f32;
-    let mut nb = 0.0f32;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-    if na > 0.0 && nb > 0.0 {
-        dot / (na.sqrt() * nb.sqrt())
-    } else {
-        0.0
-    }
-}
-
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl MemoryStore for SqliteMemoryStore {
-    async fn store(&self, object: MemoryObject) -> Result<String, GeniusError> {
-        let type_json = Self::type_json(&object.object_type);
+    type Error = GyrusError;
 
+    async fn store(&self, object: MemoryObject) -> Result<String, GyrusError> {
         sqlx::query(
             r#"INSERT OR REPLACE INTO memory_objects
                (id, short_name, long_name, description, object_type, content, metadata, created_at, updated_at)
@@ -211,14 +172,13 @@ impl MemoryStore for SqliteMemoryStore {
         .bind(&object.short_name)
         .bind(&object.long_name)
         .bind(&object.description)
-        .bind(&type_json)
+        .bind(&object.object_type)
         .bind(&object.content)
         .bind(&object.metadata)
         .bind(object.created_at as i64)
         .bind(object.updated_at as i64)
         .execute(&self.pool)
-        .await
-        .map_err(|e| GeniusError::MemoryError(format!("INSERT memory_objects error: {}", e)))?;
+        .await?;
 
         if let Some(ref embedding) = object.embedding {
             self.store_embedding(&object.id, embedding).await?;
@@ -232,9 +192,8 @@ impl MemoryStore for SqliteMemoryStore {
         query: &str,
         embedding: &[f32],
         limit: usize,
-        object_type: Option<&MemoryObjectType>,
-    ) -> Result<Vec<MemoryObject>, GeniusError> {
-        // FTS5 text search
+        object_type: Option<&str>,
+    ) -> Result<Vec<MemoryObject>, GyrusError> {
         let fts_ids: Vec<String> = sqlx::query(
             r#"SELECT mo.id
                FROM memory_fts
@@ -252,11 +211,8 @@ impl MemoryStore for SqliteMemoryStore {
         .map(|r| r.get::<String, _>("id"))
         .collect();
 
-        // Vector search
         let vec_ids = self.vector_search(embedding, limit).await?;
 
-        // Merge: vector results first, then FTS, deduplicated
-        let type_filter = object_type.map(Self::type_json);
         let mut seen = std::collections::HashSet::new();
         let mut results = Vec::new();
 
@@ -268,8 +224,8 @@ impl MemoryStore for SqliteMemoryStore {
                 continue;
             }
             if let Some(obj) = self.get(id).await? {
-                if let Some(ref tf) = type_filter {
-                    if &Self::type_json(&obj.object_type) != tf {
+                if let Some(tf) = object_type {
+                    if obj.object_type != tf {
                         continue;
                     }
                 }
@@ -284,16 +240,15 @@ impl MemoryStore for SqliteMemoryStore {
         &self,
         embedding: &[f32],
         limit: usize,
-        object_type: Option<&MemoryObjectType>,
-    ) -> Result<Vec<MemoryObject>, GeniusError> {
+        object_type: Option<&str>,
+    ) -> Result<Vec<MemoryObject>, GyrusError> {
         let ids = self.vector_search(embedding, limit).await?;
-        let type_filter = object_type.map(Self::type_json);
         let mut results = Vec::new();
 
         for id in &ids {
             if let Some(obj) = self.get(id).await? {
-                if let Some(ref tf) = type_filter {
-                    if &Self::type_json(&obj.object_type) != tf {
+                if let Some(tf) = object_type {
+                    if obj.object_type != tf {
                         continue;
                     }
                 }
@@ -304,7 +259,7 @@ impl MemoryStore for SqliteMemoryStore {
         Ok(results)
     }
 
-    async fn get(&self, id: &str) -> Result<Option<MemoryObject>, GeniusError> {
+    async fn get(&self, id: &str) -> Result<Option<MemoryObject>, GyrusError> {
         let row = sqlx::query(
             r#"SELECT id, short_name, long_name, description, object_type,
                       content, metadata, created_at, updated_at
@@ -312,8 +267,7 @@ impl MemoryStore for SqliteMemoryStore {
         )
         .bind(id)
         .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| GeniusError::MemoryError(format!("SELECT error: {}", e)))?;
+        .await?;
 
         match row {
             None => Ok(None),
@@ -325,72 +279,167 @@ impl MemoryStore for SqliteMemoryStore {
         }
     }
 
-    async fn forget(&self, id: &str) -> Result<(), GeniusError> {
+    async fn forget(&self, id: &str) -> Result<(), GyrusError> {
         self.delete_embedding(id).await?;
 
         sqlx::query("DELETE FROM memory_objects WHERE id = ?")
             .bind(id)
             .execute(&self.pool)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("DELETE memory_objects error: {}", e)))?;
+            .await?;
 
         Ok(())
     }
 
-    async fn list_by_type(
-        &self,
-        object_type: &MemoryObjectType,
-    ) -> Result<Vec<MemoryObject>, GeniusError> {
-        let type_json = Self::type_json(object_type);
-
+    async fn list_by_type(&self, object_type: &str) -> Result<Vec<MemoryObject>, GyrusError> {
         let rows = sqlx::query(
             r#"SELECT id, short_name, long_name, description, object_type,
                       content, metadata, created_at, updated_at
                FROM memory_objects WHERE object_type = ?"#,
         )
-        .bind(&type_json)
+        .bind(object_type)
         .fetch_all(&self.pool)
-        .await
-        .map_err(|e| GeniusError::MemoryError(format!("SELECT by type error: {}", e)))?;
+        .await?;
 
         rows.iter().map(Self::row_to_object).collect()
     }
 
-    async fn list_all(&self) -> Result<Vec<MemoryObject>, GeniusError> {
+    async fn list_all(&self) -> Result<Vec<MemoryObject>, GyrusError> {
         let rows = sqlx::query(
             r#"SELECT id, short_name, long_name, description, object_type,
                       content, metadata, created_at, updated_at
                FROM memory_objects"#,
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|e| GeniusError::MemoryError(format!("SELECT all error: {}", e)))?;
+        .await?;
 
         rows.iter().map(Self::row_to_object).collect()
     }
 
-    async fn flush_all(&self) -> Result<(), GeniusError> {
+    async fn flush_all(&self) -> Result<(), GyrusError> {
         #[cfg(feature = "vec0")]
         sqlx::query("DELETE FROM memory_vec")
             .execute(&self.pool)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("DELETE memory_vec error: {}", e)))?;
+            .await?;
 
         #[cfg(not(feature = "vec0"))]
         sqlx::query("DELETE FROM memory_embeddings")
             .execute(&self.pool)
-            .await
-            .map_err(|e| {
-                GeniusError::MemoryError(format!("DELETE memory_embeddings error: {}", e))
-            })?;
+            .await?;
 
         sqlx::query("DELETE FROM memory_objects")
             .execute(&self.pool)
-            .await
-            .map_err(|e| {
-                GeniusError::MemoryError(format!("DELETE memory_objects error: {}", e))
-            })?;
+            .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn make_store() -> SqliteMemoryStore {
+        SqliteMemoryStore::new("sqlite::memory:").await.unwrap()
+    }
+
+    fn make_object(id: &str, short_name: &str, object_type: &str, content: &str) -> MemoryObject {
+        MemoryObject {
+            id: id.to_string(),
+            short_name: short_name.to_string(),
+            long_name: format!("{} (full)", short_name),
+            description: format!("Test object: {}", short_name),
+            object_type: object_type.to_string(),
+            content: content.to_string(),
+            embedding: None,
+            metadata: None,
+            created_at: 1000,
+            updated_at: 1000,
+            ttl: None,
+        }
+    }
+
+    #[async_std::test]
+    async fn store_and_get() {
+        let store = make_store().await;
+        let obj = make_object("id1", "test", "Fact", "Some fact");
+        let id = store.store(obj).await.unwrap();
+        assert_eq!(id, "id1");
+
+        let retrieved = store.get("id1").await.unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().content, "Some fact");
+    }
+
+    #[async_std::test]
+    async fn get_missing() {
+        let store = make_store().await;
+        assert!(store.get("nonexistent").await.unwrap().is_none());
+    }
+
+    #[async_std::test]
+    async fn forget() {
+        let store = make_store().await;
+        store.store(make_object("id1", "test", "Fact", "content")).await.unwrap();
+        store.forget("id1").await.unwrap();
+        assert!(store.get("id1").await.unwrap().is_none());
+    }
+
+    #[async_std::test]
+    async fn list_all() {
+        let store = make_store().await;
+        store.store(make_object("a", "a", "Fact", "fact")).await.unwrap();
+        store.store(make_object("b", "b", "Observation", "obs")).await.unwrap();
+        assert_eq!(store.list_all().await.unwrap().len(), 2);
+    }
+
+    #[async_std::test]
+    async fn list_by_type() {
+        let store = make_store().await;
+        store.store(make_object("a", "a", "Fact", "fact")).await.unwrap();
+        store.store(make_object("b", "b", "Observation", "obs")).await.unwrap();
+        store.store(make_object("c", "c", "Fact", "another")).await.unwrap();
+
+        let facts = store.list_by_type("Fact").await.unwrap();
+        assert_eq!(facts.len(), 2);
+    }
+
+    #[async_std::test]
+    async fn flush_all() {
+        let store = make_store().await;
+        store.store(make_object("a", "a", "Fact", "a")).await.unwrap();
+        store.store(make_object("b", "b", "Fact", "b")).await.unwrap();
+        store.flush_all().await.unwrap();
+        assert_eq!(store.list_all().await.unwrap().len(), 0);
+    }
+
+    #[async_std::test]
+    async fn store_with_embedding() {
+        let store = make_store().await;
+        let mut obj = make_object("e1", "emb", "Fact", "content");
+        obj.embedding = Some(vec![0.1, 0.2, 0.3]);
+        store.store(obj).await.unwrap();
+
+        let retrieved = store.get("e1").await.unwrap().unwrap();
+        assert!(retrieved.embedding.is_some());
+        let emb = retrieved.embedding.unwrap();
+        assert_eq!(emb.len(), 3);
+        assert!((emb[0] - 0.1).abs() < 0.001);
+    }
+
+    #[async_std::test]
+    async fn vector_recall() {
+        let store = make_store().await;
+
+        let mut obj1 = make_object("v1", "vec1", "Fact", "content1");
+        obj1.embedding = Some(vec![1.0, 0.0, 0.0]);
+        store.store(obj1).await.unwrap();
+
+        let mut obj2 = make_object("v2", "vec2", "Fact", "content2");
+        obj2.embedding = Some(vec![0.0, 1.0, 0.0]);
+        store.store(obj2).await.unwrap();
+
+        let results = store.recall_by_vector(&[1.0, 0.0, 0.0], 10, None).await.unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].id, "v1");
     }
 }

@@ -1,7 +1,6 @@
-pub mod schema;
-pub mod store;
+pub mod adapter;
 
-pub use store::SqliteMemoryStore;
+pub use adapter::SqliteMemoryStore;
 
 use futures::channel::mpsc;
 use futures::sink::SinkExt;

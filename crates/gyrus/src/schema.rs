@@ -65,7 +65,6 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
 
 /// Initialize the database schema: base table, FTS5, triggers, and vector storage.
 pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    // Enable foreign keys
     sqlx::query("PRAGMA foreign_keys = ON").execute(pool).await?;
 
     sqlx::query(CREATE_MEMORY_OBJECTS).execute(pool).await?;
