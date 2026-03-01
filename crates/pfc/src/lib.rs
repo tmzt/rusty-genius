@@ -44,7 +44,7 @@ impl PfcWorker {
                         match self.embedder.embed(&object.content).await {
                             Ok(vec) => object.embedding = Some(vec),
                             Err(e) => {
-                                MemoryBody::Error(format!("Embedding failed: {}", e));
+                                output_tx.send(MemoryOutput { id: request_id, body: MemoryBody::Error(format!("Embedding failed: {}", e)) }).await.ok();
                                 continue;
                             }
                         }
@@ -63,7 +63,7 @@ impl PfcWorker {
                     let embedding = match self.embedder.embed(&query).await {
                         Ok(vec) => vec,
                         Err(e) => {
-                            MemoryBody::Error(format!("Embedding failed: {}", e));
+                            output_tx.send(MemoryOutput { id: request_id, body: MemoryBody::Error(format!("Embedding failed: {}", e)) }).await.ok();
                             continue;
                         }
                     };

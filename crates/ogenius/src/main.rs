@@ -519,8 +519,29 @@ async fn main() -> anyhow::Result<()> {
             });
 
             // Spawn context worker
-            let context_worker =
-                ContextWorker::new(Box::new(InMemoryContextStore::new()));
+            let context_store: Box<dyn rusty_genius_core::context::ContextStore> = {
+                #[cfg(feature = "redis-context")]
+                {
+                    let url = std::env::var("REDIS_URL")
+                        .unwrap_or_else(|_| "redis://127.0.0.1/".to_string());
+                    let prefix = std::env::var("REDIS_CONTEXT_PREFIX").ok();
+                    match rusty_genius_stem::RedisContextStore::new(&url, prefix).await {
+                        Ok(store) => Box::new(store),
+                        Err(e) => {
+                            eprintln!(
+                                "WARN: Failed to connect to Redis ({}), falling back to in-memory store",
+                                e
+                            );
+                            Box::new(InMemoryContextStore::new())
+                        }
+                    }
+                }
+                #[cfg(not(feature = "redis-context"))]
+                {
+                    Box::new(InMemoryContextStore::new())
+                }
+            };
+            let context_worker = ContextWorker::new(context_store);
             async_std::task::spawn(async move {
                 context_worker
                     .run(context_input_rx, context_output_tx)

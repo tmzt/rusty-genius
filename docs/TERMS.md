@@ -15,4 +15,4 @@ rusty-genius uses biologically inspired naming for its crates. This document map
 | **hippocampus** | Hippocampus | Browser/WASM memory (IndexedDB + FTS5) | `rusty-genius-hippocampus` |
 | **facecrab** | — (HuggingFace pun) | Asset authority, model registry & downloads | `rusty-genius-facecrab` |
 | **genius** | — (intelligence) | Public facade / API surface | `rusty-genius` |
-| **brainteaser** | — (puzzle) | Integration testing harness | `rusty-genius-brain-teaser` |
+| **brainteaser** | — (puzzle) | Integration testing harness | `rusty-genius-teaser` |

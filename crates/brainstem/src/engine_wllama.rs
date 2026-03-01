@@ -5,6 +5,7 @@ use futures::sink::SinkExt;
 use rusty_genius_core::engine::Engine;
 use rusty_genius_core::manifest::InferenceConfig;
 use rusty_genius_core::protocol::InferenceEvent;
+use std::sync::Mutex;
 use wasmtime::*;
 
 struct HostState {
@@ -18,15 +19,10 @@ pub struct WllamaEngine {
     wasm_engine: wasmtime::Engine,
     #[allow(dead_code)]
     module: Module,
-    store: Store<HostState>,
+    store: Mutex<Store<HostState>>,
     instance: Option<Instance>,
     loaded: bool,
 }
-
-// Safety: WllamaEngine is only ever accessed through &mut self (Engine trait),
-// so no concurrent access is possible. The Sync bound is required by the Engine
-// trait but all methods take &mut self.
-unsafe impl Sync for WllamaEngine {}
 
 impl WllamaEngine {
     pub fn new() -> Self {
@@ -41,7 +37,7 @@ impl WllamaEngine {
         Self {
             wasm_engine,
             module,
-            store,
+            store: Mutex::new(store),
             instance: None,
             loaded: false,
         }
@@ -127,7 +123,7 @@ impl WllamaEngine {
         Ok(Self {
             wasm_engine,
             module,
-            store,
+            store: Mutex::new(store),
             instance: Some(instance),
             loaded: false,
         })
@@ -190,18 +186,20 @@ impl Engine for WllamaEngine {
             .ok_or_else(|| anyhow!("no wasm instance"))?
             .clone();
 
+        let store = self.store.get_mut().map_err(|e| anyhow!("lock poisoned: {}", e))?;
+
         let path_bytes = model_path.as_bytes();
-        let ptr = Self::write_to_guest(&mut self.store, &instance, path_bytes)?;
+        let ptr = Self::write_to_guest(store, &instance, path_bytes)?;
 
         let load_model_fn = instance
-            .get_typed_func::<(i32, i32), i32>(&mut self.store, "load_model")
+            .get_typed_func::<(i32, i32), i32>(&mut *store, "load_model")
             .map_err(|e| anyhow!("load_model export not found: {}", e))?;
 
         let result = load_model_fn
-            .call(&mut self.store, (ptr, path_bytes.len() as i32))
+            .call(&mut *store, (ptr, path_bytes.len() as i32))
             .map_err(|e| anyhow!("load_model call failed: {}", e))?;
 
-        let _ = Self::free_guest(&mut self.store, &instance, ptr, path_bytes.len() as i32);
+        let _ = Self::free_guest(store, &instance, ptr, path_bytes.len() as i32);
 
         if result != 0 {
             return Err(anyhow!("guest load_model returned error code {}", result));
@@ -218,12 +216,14 @@ impl Engine for WllamaEngine {
             .ok_or_else(|| anyhow!("no wasm instance"))?
             .clone();
 
+        let store = self.store.get_mut().map_err(|e| anyhow!("lock poisoned: {}", e))?;
+
         let unload_fn = instance
-            .get_typed_func::<(), i32>(&mut self.store, "unload_model")
+            .get_typed_func::<(), i32>(&mut *store, "unload_model")
             .map_err(|e| anyhow!("unload_model export not found: {}", e))?;
 
         let result = unload_fn
-            .call(&mut self.store, ())
+            .call(&mut *store, ())
             .map_err(|e| anyhow!("unload_model call failed: {}", e))?;
 
         if result != 0 {
@@ -261,27 +261,29 @@ impl Engine for WllamaEngine {
             .ok_or_else(|| anyhow!("no wasm instance"))?
             .clone();
 
+        let store = self.store.get_mut().map_err(|e| anyhow!("lock poisoned: {}", e))?;
+
         // Set up token sender in host state
-        self.store.data_mut().token_sender = Some(tx.clone());
+        store.data_mut().token_sender = Some(tx.clone());
 
         let prompt_bytes = prompt.as_bytes();
-        let ptr = Self::write_to_guest(&mut self.store, &instance, prompt_bytes)?;
+        let ptr = Self::write_to_guest(store, &instance, prompt_bytes)?;
 
         let infer_fn = instance
-            .get_typed_func::<(i32, i32, i32), i32>(&mut self.store, "infer")
+            .get_typed_func::<(i32, i32, i32), i32>(&mut *store, "infer")
             .map_err(|e| anyhow!("infer export not found: {}", e))?;
 
         let result = infer_fn
             .call(
-                &mut self.store,
+                &mut *store,
                 (ptr, prompt_bytes.len() as i32, 0), // mode 0 = chat
             )
             .map_err(|e| anyhow!("infer call failed: {}", e))?;
 
-        let _ = Self::free_guest(&mut self.store, &instance, ptr, prompt_bytes.len() as i32);
+        let _ = Self::free_guest(store, &instance, ptr, prompt_bytes.len() as i32);
 
         // Clear token sender
-        self.store.data_mut().token_sender = None;
+        store.data_mut().token_sender = None;
 
         if result < 0 {
             let _ = tx
@@ -311,24 +313,26 @@ impl Engine for WllamaEngine {
             .ok_or_else(|| anyhow!("no wasm instance"))?
             .clone();
 
+        let store = self.store.get_mut().map_err(|e| anyhow!("lock poisoned: {}", e))?;
+
         // Clear embedding buffer
-        self.store.data_mut().embedding_buffer.clear();
+        store.data_mut().embedding_buffer.clear();
 
         let input_bytes = input.as_bytes();
-        let ptr = Self::write_to_guest(&mut self.store, &instance, input_bytes)?;
+        let ptr = Self::write_to_guest(store, &instance, input_bytes)?;
 
         let infer_fn = instance
-            .get_typed_func::<(i32, i32, i32), i32>(&mut self.store, "infer")
+            .get_typed_func::<(i32, i32, i32), i32>(&mut *store, "infer")
             .map_err(|e| anyhow!("infer export not found: {}", e))?;
 
         let result = infer_fn
             .call(
-                &mut self.store,
+                &mut *store,
                 (ptr, input_bytes.len() as i32, 1), // mode 1 = embed
             )
             .map_err(|e| anyhow!("infer (embed mode) call failed: {}", e))?;
 
-        let _ = Self::free_guest(&mut self.store, &instance, ptr, input_bytes.len() as i32);
+        let _ = Self::free_guest(store, &instance, ptr, input_bytes.len() as i32);
 
         if result < 0 {
             let _ = tx
@@ -336,7 +340,7 @@ impl Engine for WllamaEngine {
                 .await;
         } else {
             // Collect embeddings from host state
-            let embeddings = std::mem::take(&mut self.store.data_mut().embedding_buffer);
+            let embeddings = std::mem::take(&mut store.data_mut().embedding_buffer);
             let _ = tx.send(Ok(InferenceEvent::Embedding(embeddings))).await;
         }
 

@@ -11,29 +11,36 @@ pub struct RedisCapabilities {
 /// ARGV[1] = JSON-encoded query vector
 /// ARGV[2] = limit
 /// Returns alternating [id, score, id, score, ...]
+///
+/// NOTE: This script uses SCAN instead of KEYS to avoid blocking the server.
 pub const LUA_COSINE_SEARCH: &str = r#"
 local cjson = require('cjson')
 local prefix = KEYS[1]
 local query = cjson.decode(ARGV[1])
 local limit = tonumber(ARGV[2])
-local keys = redis.call('KEYS', prefix .. ':vec:*')
+local cursor = "0"
 local results = {}
-for _, key in ipairs(keys) do
-  local raw = redis.call('GET', key)
-  if raw then
-    local vec = cjson.decode(raw)
-    local dot, na, nb = 0, 0, 0
-    for i = 1, #query do
-      dot = dot + query[i] * vec[i]
-      na = na + query[i] * query[i]
-      nb = nb + vec[i] * vec[i]
+repeat
+  local res = redis.call('SCAN', cursor, 'MATCH', prefix .. ':vec:*', 'COUNT', 100)
+  cursor = res[1]
+  local keys = res[2]
+  for _, key in ipairs(keys) do
+    local raw = redis.call('GET', key)
+    if raw then
+      local vec = cjson.decode(raw)
+      local dot, na, nb = 0, 0, 0
+      for i = 1, #query do
+        dot = dot + query[i] * vec[i]
+        na = na + query[i] * query[i]
+        nb = nb + vec[i] * vec[i]
+      end
+      local sim = 0
+      if na > 0 and nb > 0 then sim = dot / (math.sqrt(na) * math.sqrt(nb)) end
+      local id = string.sub(key, #prefix + 6)
+      results[#results+1] = {sim, id}
     end
-    local sim = 0
-    if na > 0 and nb > 0 then sim = dot / (math.sqrt(na) * math.sqrt(nb)) end
-    local id = string.sub(key, #prefix + 6)
-    results[#results+1] = {sim, id}
   end
-end
+until cursor == "0"
 table.sort(results, function(a, b) return a[1] > b[1] end)
 local ret = {}
 for i = 1, math.min(limit, #results) do

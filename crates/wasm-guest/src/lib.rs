@@ -12,12 +12,18 @@ extern "C" {
 
 #[no_mangle]
 pub extern "C" fn guest_alloc(size: i32) -> i32 {
+    if size <= 0 {
+        return 0;
+    }
     let layout = Layout::from_size_align(size as usize, 1).unwrap();
     unsafe { alloc(layout) as i32 }
 }
 
 #[no_mangle]
 pub extern "C" fn guest_dealloc(ptr: i32, size: i32) {
+    if size <= 0 {
+        return;
+    }
     let layout = Layout::from_size_align(size as usize, 1).unwrap();
     unsafe { dealloc(ptr as *mut u8, layout) }
 }
@@ -27,7 +33,10 @@ pub extern "C" fn load_model(name_ptr: i32, name_len: i32) -> i32 {
     // Read the model name (validates it's valid UTF-8)
     let _name = unsafe {
         let slice = std::slice::from_raw_parts(name_ptr as *const u8, name_len as usize);
-        std::str::from_utf8_unchecked(slice)
+        match std::str::from_utf8(slice) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
     };
     MODEL_LOADED.store(true, Ordering::SeqCst);
     0 // success
@@ -59,7 +68,10 @@ pub extern "C" fn infer(prompt_ptr: i32, prompt_len: i32, mode: i32) -> i32 {
 
     let prompt = unsafe {
         let slice = std::slice::from_raw_parts(prompt_ptr as *const u8, prompt_len as usize);
-        std::str::from_utf8_unchecked(slice)
+        match std::str::from_utf8(slice) {
+            Ok(s) => s,
+            Err(_) => return -1,
+        }
     };
 
     if mode == 1 {

@@ -5,6 +5,32 @@ use rusty_genius_core::memory::{MemoryObject, MemoryObjectType, MemoryStore};
 
 use crate::bootstrap::{self, RedisCapabilities, LUA_COSINE_SEARCH};
 
+/// Incrementally collect keys matching `pattern` using SCAN (non-blocking).
+async fn scan_keys(
+    conn: &mut redis::aio::MultiplexedConnection,
+    pattern: &str,
+) -> Result<Vec<String>, GeniusError> {
+    let mut keys = Vec::new();
+    let mut cursor: u64 = 0;
+    loop {
+        let (next_cursor, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(100)
+            .query_async(conn)
+            .await
+            .map_err(|e| GeniusError::MemoryError(format!("Redis SCAN error: {}", e)))?;
+        keys.extend(batch);
+        cursor = next_cursor;
+        if cursor == 0 {
+            break;
+        }
+    }
+    Ok(keys)
+}
+
 pub struct RedisMemoryStore {
     connection: redis::aio::MultiplexedConnection,
     prefix: String,
@@ -49,6 +75,46 @@ impl RedisMemoryStore {
         serde_json::to_string(object_type).unwrap_or_else(|_| "unknown".to_string())
     }
 
+    /// Text search using RediSearch FT.SEARCH when available.
+    async fn text_search_redisearch(
+        &self,
+        query: &str,
+        limit: usize,
+        object_type: Option<&MemoryObjectType>,
+    ) -> Result<Vec<String>, GeniusError> {
+        let mut conn = self.connection.clone();
+        let idx_name = format!("{}:idx", self.prefix);
+
+        let mut ft_query = query.to_string();
+        if let Some(ot) = object_type {
+            let tag = Self::type_tag(ot);
+            ft_query = format!("{} @object_type:{{{}}}", ft_query, tag);
+        }
+
+        let result: Vec<redis::Value> = redis::cmd("FT.SEARCH")
+            .arg(&idx_name)
+            .arg(&ft_query)
+            .arg("LIMIT")
+            .arg(0)
+            .arg(limit)
+            .arg("NOCONTENT")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| GeniusError::MemoryError(format!("FT.SEARCH error: {}", e)))?;
+
+        // FT.SEARCH NOCONTENT returns: [total_count, key1, key2, ...]
+        let obj_prefix = format!("{}:obj:", self.prefix);
+        let mut ids = Vec::new();
+        for item in result.iter().skip(1) {
+            if let redis::Value::BulkString(bytes) = item {
+                let key = String::from_utf8_lossy(bytes).to_string();
+                let id = key.strip_prefix(&obj_prefix).unwrap_or(&key);
+                ids.push(id.to_string());
+            }
+        }
+        Ok(ids)
+    }
+
     /// Fallback text search: SCAN + HGET + substring matching.
     async fn text_search_fallback(
         &self,
@@ -58,17 +124,14 @@ impl RedisMemoryStore {
     ) -> Result<Vec<String>, GeniusError> {
         let mut conn = self.connection.clone();
         let pattern = format!("{}:obj:*", self.prefix);
-        let keys: Vec<String> = conn
-            .keys(&pattern)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("Redis KEYS error: {}", e)))?;
+        let keys = scan_keys(&mut conn, &pattern).await?;
 
         let query_lower = query.to_lowercase();
         let type_filter = object_type.map(Self::type_tag);
         let mut matched_ids = Vec::new();
 
         for key in &keys {
-            let fields: Vec<String> = redis::cmd("HMGET")
+            let fields: Vec<Option<String>> = redis::cmd("HMGET")
                 .arg(key)
                 .arg("short_name")
                 .arg("long_name")
@@ -85,7 +148,7 @@ impl RedisMemoryStore {
 
             // Type filter
             if let Some(ref tf) = type_filter {
-                if &fields[4] != tf {
+                if fields[4].as_deref().unwrap_or_default() != tf.as_str() {
                     continue;
                 }
             }
@@ -93,7 +156,7 @@ impl RedisMemoryStore {
             // Text match against short_name, long_name, description, content
             let matches = fields[..4]
                 .iter()
-                .any(|f| f.to_lowercase().contains(&query_lower));
+                .any(|f| f.as_deref().unwrap_or_default().to_lowercase().contains(&query_lower));
 
             if matches {
                 let id = key
@@ -250,7 +313,11 @@ impl MemoryStore for RedisMemoryStore {
         object_type: Option<&MemoryObjectType>,
     ) -> Result<Vec<MemoryObject>, GeniusError> {
         // Combine text search + vector search results
-        let text_ids = self.text_search_fallback(query, limit, object_type).await?;
+        let text_ids = if self.capabilities.has_redisearch {
+            self.text_search_redisearch(query, limit, object_type).await?
+        } else {
+            self.text_search_fallback(query, limit, object_type).await?
+        };
         let vec_ids = self
             .recall_by_vector(embedding, limit, object_type)
             .await?
@@ -354,10 +421,7 @@ impl MemoryStore for RedisMemoryStore {
     async fn list_all(&self) -> Result<Vec<MemoryObject>, GeniusError> {
         let mut conn = self.connection.clone();
         let pattern = format!("{}:obj:*", self.prefix);
-        let keys: Vec<String> = conn
-            .keys(&pattern)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("Redis KEYS error: {}", e)))?;
+        let keys = scan_keys(&mut conn, &pattern).await?;
 
         let mut objects = Vec::new();
         for key in &keys {
@@ -375,10 +439,7 @@ impl MemoryStore for RedisMemoryStore {
     async fn flush_all(&self) -> Result<(), GeniusError> {
         let mut conn = self.connection.clone();
         let pattern = format!("{}:*", self.prefix);
-        let keys: Vec<String> = conn
-            .keys(&pattern)
-            .await
-            .map_err(|e| GeniusError::MemoryError(format!("Redis KEYS error: {}", e)))?;
+        let keys = scan_keys(&mut conn, &pattern).await?;
 
         if !keys.is_empty() {
             redis::cmd("DEL")

@@ -64,13 +64,9 @@ impl Orchestrator {
 
     #[cfg(all(feature = "wllama", not(feature = "cortex-engine")))]
     pub async fn new() -> Result<Self> {
-        let engine = Box::new(WllamaEngine::new());
-        Ok(Self {
-            engine,
-            strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
-            last_activity: Instant::now(),
-            last_model_name: None,
-        })
+        Err(anyhow::anyhow!(
+            "Use Orchestrator::with_engine(WllamaEngine::from_wasm_bytes(...)) to create a wllama-backed orchestrator"
+        ))
     }
 
     /// Create an Orchestrator with a pre-built engine (useful for testing).

@@ -43,7 +43,7 @@ impl EmbeddingProvider for BrainstemEmbedder {
         let input = BrainstemInput {
             id: Some(request_id.clone()),
             command: BrainstemCommand::Embed {
-                model: None, // orchestrator auto-selects "embedding-gemma"
+                model: None, // uses the engine's default model
                 input: text.to_string(),
                 config: InferenceConfig::default(),
             },

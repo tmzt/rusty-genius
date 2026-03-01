@@ -8,7 +8,9 @@
 /// without removing those bounds for native targets.
 pub struct WasmSendSync<T>(pub T);
 
+#[cfg(target_arch = "wasm32")]
 unsafe impl<T> Send for WasmSendSync<T> {}
+#[cfg(target_arch = "wasm32")]
 unsafe impl<T> Sync for WasmSendSync<T> {}
 
 impl<T> std::ops::Deref for WasmSendSync<T> {
