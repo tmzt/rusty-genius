@@ -1,4 +1,4 @@
-#![cfg(feature = "wllama")]
+#![cfg(feature = "cortex-engine-wllama")]
 
 use futures::channel::mpsc;
 use futures::sink::SinkExt;

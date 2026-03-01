@@ -1,4 +1,4 @@
-#![cfg(feature = "genai")]
+#![cfg(feature = "cortex-engine-genai")]
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;

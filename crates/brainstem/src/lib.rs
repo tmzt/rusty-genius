@@ -2,14 +2,14 @@ pub mod context_worker;
 pub mod embedder;
 #[cfg(feature = "redis-context")]
 pub mod redis_store;
-#[cfg(feature = "wllama")]
+#[cfg(feature = "cortex-engine-wllama")]
 pub mod engine_wllama;
 
 pub use context_worker::ContextWorker;
 pub use embedder::BrainstemEmbedder;
 #[cfg(feature = "redis-context")]
 pub use redis_store::RedisContextStore;
-#[cfg(feature = "wllama")]
+#[cfg(feature = "cortex-engine-wllama")]
 pub use engine_wllama::WllamaEngine;
 
 use anyhow::Result;
@@ -27,9 +27,9 @@ use facecrab::AssetAuthority;
 #[cfg(feature = "cortex-engine")]
 use rusty_genius_core::protocol::AssetEvent;
 
-#[cfg(not(any(feature = "cortex-engine", feature = "wllama")))]
+#[cfg(not(any(feature = "cortex-engine", feature = "cortex-engine-wllama")))]
 compile_error!(
-    "rusty-genius-stem requires at least one engine feature: `cortex-engine` or `wllama`"
+    "rusty-genius-stem requires at least one engine feature: `cortex-engine` or `cortex-engine-wllama`"
 );
 
 #[derive(Debug, Clone)]
@@ -62,7 +62,7 @@ impl Orchestrator {
         })
     }
 
-    #[cfg(all(feature = "wllama", not(feature = "cortex-engine")))]
+    #[cfg(all(feature = "cortex-engine-wllama", not(feature = "cortex-engine")))]
     pub async fn new() -> Result<Self> {
         let engine = Box::new(WllamaEngine::new());
         Ok(Self {

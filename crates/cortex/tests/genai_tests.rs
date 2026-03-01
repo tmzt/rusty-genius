@@ -1,4 +1,4 @@
-#![cfg(feature = "genai")]
+#![cfg(feature = "cortex-engine-genai")]
 
 use rusty_genius_cortex::backend::{
     build_embed_body, build_infer_body, embed_url, infer_url, parse_sse_line, GeminiApiConfig,
