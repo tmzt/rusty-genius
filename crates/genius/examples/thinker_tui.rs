@@ -4,11 +4,21 @@
 //!   - Chat screen: send messages, see tool calls and results
 //!   - Memory browser: view/delete stored memories
 //!
-//! Run: cargo run -p rusty-genius --example thinker_tui
+//! Run (macOS, uses llama.cpp + Metal):
+//!   cargo run -p rusty-genius --features metal --example thinker_tui
+//!
+//! Run (stub engine):
+//!   cargo run -p rusty-genius --example thinker_tui
+
+#[cfg(all(target_os = "macos", not(feature = "real-engine")))]
+compile_error!(
+    "On macOS, build with llama.cpp Metal acceleration:\n  \
+     cargo run -p rusty-genius --features metal --example thinker_tui"
+);
 
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
@@ -73,6 +83,8 @@ struct App {
     // Sync receiver for main loop
     sync_rx: std::sync::mpsc::Receiver<BrainstemOutput>,
     is_inferring: bool,
+    thinking_since: Option<Instant>,
+    show_debug: bool,
     // Tool definitions for InferWithTools
     tool_defs: Vec<rusty_genius_core::protocol::ToolDefinition>,
     // Conversation messages for multi-turn
@@ -163,6 +175,8 @@ async fn run_app() -> io::Result<()> {
         inference_tx: input_tx,
         sync_rx,
         is_inferring: false,
+        thinking_since: None,
+        show_debug: false,
         tool_defs,
         conversation: Vec::new(),
     };
@@ -248,7 +262,6 @@ fn handle_brainstem_output(app: &mut App, msg: BrainstemOutput) {
                 rusty_genius_core::protocol::ThoughtEvent::Stop => {}
             },
             InferenceEvent::Content(text) => {
-                // Check if this is a tool_result forwarded as content
                 if text.starts_with("[tool_result:") {
                     app.chat_log.push(ChatEntry {
                         role: EntryRole::System,
@@ -275,18 +288,10 @@ fn handle_brainstem_output(app: &mut App, msg: BrainstemOutput) {
             }
             InferenceEvent::Complete => {
                 app.is_inferring = false;
+                app.thinking_since = None;
             }
             InferenceEvent::Embedding(_) => {}
         },
-        BrainstemBody::ToolCallRequest { calls, .. } => {
-            for call in &calls {
-                app.chat_log.push(ChatEntry {
-                    role: EntryRole::System,
-                    content: format!("[unhandled tool call] {}", call.name),
-                    kind: EntryKind::ToolCall,
-                });
-            }
-        }
         BrainstemBody::Error(e) => {
             app.chat_log.push(ChatEntry {
                 role: EntryRole::System,
@@ -294,6 +299,7 @@ fn handle_brainstem_output(app: &mut App, msg: BrainstemOutput) {
                 kind: EntryKind::Message,
             });
             app.is_inferring = false;
+            app.thinking_since = None;
         }
         _ => {}
     }
@@ -312,6 +318,9 @@ fn handle_chat_key(app: &mut App, key: KeyEvent) {
             // Refresh memory list and switch screen
             refresh_memory_list(app);
             app.screen = Screen::MemoryBrowser;
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.show_debug = !app.show_debug;
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.should_quit = true;
@@ -414,6 +423,7 @@ fn send_message(app: &mut App) {
     });
 
     app.is_inferring = true;
+    app.thinking_since = Some(Instant::now());
 
     // Send InferWithTools command
     let cmd = BrainstemCommand::InferWithTools {
@@ -456,10 +466,16 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
         .split(area);
 
     // Header
-    let status = if app.is_inferring { "thinking..." } else { "ready" };
+    let engine_name = if cfg!(feature = "real-engine") { "llama.cpp" } else { "pinky" };
+    let status = if let Some(since) = app.thinking_since {
+        format!("Thinking... {:.1}s", since.elapsed().as_secs_f64())
+    } else {
+        "ready".to_string()
+    };
+    let debug_tag = if app.show_debug { " [DBG]" } else { "" };
     let header = Paragraph::new(format!(
-        " rusty-genius Thinker  |  Model: pinky  |  {}  |  Ctrl-M: Memory  |  Ctrl-C: Quit",
-        status
+        " rusty-genius Thinker  |  Engine: {}  |  {}{}  |  ^M: Memory  ^D: Debug  ^C: Quit",
+        engine_name, status, debug_tag
     ))
     .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
     .block(Block::default().borders(Borders::ALL));
@@ -472,21 +488,28 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
     // Auto-scroll to bottom
     app.scroll_to_bottom(inner_height);
 
+    let show_debug = app.show_debug;
     let lines: Vec<Line> = app
         .chat_log
         .iter()
+        .filter(|entry| {
+            match entry.kind {
+                EntryKind::Thought | EntryKind::ToolCall | EntryKind::ToolResult => show_debug,
+                EntryKind::Message => true,
+            }
+        })
         .flat_map(|entry| {
             let (prefix, style) = match (&entry.role, &entry.kind) {
                 (EntryRole::User, _) => (
-                    "> You: ",
+                    "[User] ",
                     Style::default().fg(Color::Green),
                 ),
                 (EntryRole::Assistant, EntryKind::Thought) => (
-                    "  [thinking] ",
+                    "  [thought] ",
                     Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
                 ),
                 (EntryRole::Assistant, EntryKind::Message) => (
-                    "< Pinky: ",
+                    "[Assistant] ",
                     Style::default().fg(Color::Yellow),
                 ),
                 (EntryRole::System, EntryKind::ToolCall) => (
@@ -498,7 +521,7 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
                     Style::default().fg(Color::Blue),
                 ),
                 (_, _) => (
-                    "  ",
+                    "[System] ",
                     Style::default().fg(Color::Gray),
                 ),
             };
