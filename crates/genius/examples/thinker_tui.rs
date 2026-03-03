@@ -4,16 +4,22 @@
 //!   - Chat screen: send messages, see tool calls and results
 //!   - Memory browser: view/delete stored memories
 //!
-//! Run (macOS, uses llama.cpp + Metal):
+//! Run (macOS with Metal):
 //!   cargo run -p rusty-genius --features metal --example thinker_tui
 //!
-//! Run (stub engine):
-//!   cargo run -p rusty-genius --example thinker_tui
+//! Run (Linux with CUDA):
+//!   cargo run -p rusty-genius --features cuda --example thinker_tui
+//!
+//! Run (CPU only):
+//!   cargo run -p rusty-genius --features real-engine --example thinker_tui
 
-#[cfg(all(target_os = "macos", not(feature = "real-engine")))]
+#[cfg(not(feature = "real-engine"))]
 compile_error!(
-    "On macOS, build with llama.cpp Metal acceleration:\n  \
-     cargo run -p rusty-genius --features metal --example thinker_tui"
+    "thinker_tui requires a real inference engine. Build with one of:\n  \
+     --features metal       (macOS, GPU)\n  \
+     --features cuda        (Linux, GPU)\n  \
+     --features vulkan      (cross-platform, GPU)\n  \
+     --features real-engine (CPU only)"
 );
 
 use std::io;
