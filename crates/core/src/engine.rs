@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use futures::channel::mpsc;
 
 use crate::manifest::InferenceConfig;
-use crate::protocol::InferenceEvent;
+use crate::protocol::{ChatContent, ChatMessage, InferenceEvent, ToolDefinition};
 
 #[async_trait]
 pub trait Engine: Send + Sync {
@@ -34,4 +34,29 @@ pub trait Engine: Send + Sync {
         input: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
+
+    /// Run inference with tool-use support.
+    /// Default implementation extracts the last user text and falls back to `infer()`.
+    async fn infer_with_tools(
+        &mut self,
+        messages: &[ChatMessage],
+        _tools: &[ToolDefinition],
+        config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+        // Extract last user text message as the prompt
+        let prompt = messages
+            .iter()
+            .rev()
+            .find_map(|m| match &m.content {
+                ChatContent::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        self.infer(&prompt, config).await
+    }
+
+    /// Whether this engine supports native tool use
+    fn supports_tool_use(&self) -> bool {
+        false
+    }
 }

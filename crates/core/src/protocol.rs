@@ -39,6 +39,7 @@ pub enum InferenceEvent {
     Thought(ThoughtEvent),
     Content(String),
     Embedding(Vec<f32>),
+    ToolUse(Vec<ToolCall>),
     Complete,
 }
 
@@ -47,6 +48,50 @@ pub enum ThoughtEvent {
     Start,
     Delta(String),
     Stop,
+}
+
+// ── Tool-use protocol types ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub call_id: String,
+    pub content: String,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ChatRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ChatContent {
+    Text(String),
+    ToolCalls(Vec<ToolCall>),
+    ToolResult(ToolResult),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: ChatContent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +111,12 @@ pub enum BrainstemCommand {
     Embed {
         model: Option<String>,
         input: String,
+        config: InferenceConfig,
+    },
+    InferWithTools {
+        model: Option<String>,
+        messages: Vec<ChatMessage>,
+        tools: Vec<ToolDefinition>,
         config: InferenceConfig,
     },
     ListModels,
@@ -104,6 +155,11 @@ pub enum BrainstemBody {
     Asset(AssetEvent),
     /// List of available models
     ModelList(Vec<ModelDescriptor>),
+    /// Tool calls that need external handling (no executor registered)
+    ToolCallRequest {
+        session_id: String,
+        calls: Vec<ToolCall>,
+    },
     /// Catch-all for engine or orchestrator errors
     Error(String),
 }

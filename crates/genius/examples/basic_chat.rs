@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("\nBrainstem Error: {}", err);
                 break;
             }
-            BrainstemBody::ModelList(_) => {
+            BrainstemBody::ModelList(_) | BrainstemBody::ToolCallRequest { .. } => {
                 // Ignored in this example
             }
         }

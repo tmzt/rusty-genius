@@ -156,7 +156,7 @@ mod tests {
                     BrainstemBody::Error(e) => {
                         return Err(anyhow::anyhow!("Received error from brainstem: {}", e));
                     }
-                    BrainstemBody::ModelList(_) => {
+                    BrainstemBody::ModelList(_) | BrainstemBody::ToolCallRequest { .. } => {
                         // Ignored in test harness
                     }
                 },

@@ -1,5 +1,6 @@
 pub mod context_worker;
 pub mod embedder;
+pub mod memory_tools;
 // Re-exported from striatum for backward compatibility; Redis access patterns
 // live in rusty-genius-striatum.
 #[cfg(feature = "redis-context")]
@@ -9,6 +10,7 @@ pub mod engine_wllama;
 
 pub use context_worker::ContextWorker;
 pub use embedder::BrainstemEmbedder;
+pub use memory_tools::MemoryToolExecutor;
 #[cfg(feature = "wllama")]
 pub use engine_wllama::WllamaEngine;
 
@@ -18,8 +20,10 @@ use futures::sink::SinkExt;
 use futures::StreamExt;
 use rusty_genius_core::engine::Engine;
 use rusty_genius_core::protocol::{
-    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ModelDescriptor,
+    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ChatContent, ChatMessage,
+    ChatRole, InferenceEvent, ModelDescriptor, ToolCall,
 };
+use rusty_genius_core::tools::ToolExecutor;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "cortex-engine")]
@@ -46,6 +50,7 @@ pub struct Orchestrator {
     strategy: CortexStrategy,
     last_activity: Instant,
     last_model_name: Option<String>,
+    tool_executor: Option<Box<dyn ToolExecutor>>,
 }
 
 impl Orchestrator {
@@ -59,6 +64,7 @@ impl Orchestrator {
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
             last_model_name: None,
+            tool_executor: None,
         })
     }
 
@@ -78,7 +84,14 @@ impl Orchestrator {
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
             last_model_name: None,
+            tool_executor: None,
         }
+    }
+
+    /// Attach a tool executor for handling tool calls during inference.
+    pub fn with_tool_executor(mut self, executor: Box<dyn ToolExecutor>) -> Self {
+        self.tool_executor = Some(executor);
+        self
     }
 
     pub fn set_strategy(&mut self, strategy: CortexStrategy) {
@@ -159,6 +172,22 @@ impl Orchestrator {
                         } => {
                             self.handle_embed(model, input, config, &request_id, &mut output_tx)
                                 .await;
+                        }
+                        BrainstemCommand::InferWithTools {
+                            model,
+                            messages,
+                            tools,
+                            config,
+                        } => {
+                            self.handle_infer_with_tools(
+                                model,
+                                messages,
+                                tools,
+                                config,
+                                &request_id,
+                                &mut output_tx,
+                            )
+                            .await;
                         }
                         BrainstemCommand::ListModels => {
                             self.handle_list_models(&request_id, &mut output_tx).await;
@@ -434,6 +463,149 @@ impl Orchestrator {
                     .await;
             }
         }
+    }
+
+    // ── InferWithTools ──
+
+    async fn handle_infer_with_tools(
+        &mut self,
+        model: Option<String>,
+        mut messages: Vec<ChatMessage>,
+        tools: Vec<rusty_genius_core::protocol::ToolDefinition>,
+        config: rusty_genius_core::manifest::InferenceConfig,
+        request_id: &str,
+        output_tx: &mut mpsc::Sender<BrainstemOutput>,
+    ) {
+        if !self
+            .ensure_model_loaded(model, request_id, output_tx)
+            .await
+        {
+            return;
+        }
+
+        let max_rounds = config.max_tool_rounds;
+
+        for _round in 0..max_rounds {
+            let event_rx_result = self
+                .engine
+                .infer_with_tools(&messages, &tools, config.clone())
+                .await;
+
+            let mut event_rx = match event_rx_result {
+                Ok(rx) => rx,
+                Err(e) => {
+                    let _ = output_tx
+                        .send(BrainstemOutput {
+                            id: Some(request_id.to_string()),
+                            body: BrainstemBody::Error(e.to_string()),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+            let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
+            let mut got_tool_use = false;
+
+            while let Some(event_res) = event_rx.next().await {
+                match event_res {
+                    Ok(InferenceEvent::ToolUse(calls)) => {
+                        got_tool_use = true;
+                        pending_tool_calls = calls.clone();
+                        // Forward the ToolUse event to the caller
+                        let _ = output_tx
+                            .send(BrainstemOutput {
+                                id: Some(request_id.to_string()),
+                                body: BrainstemBody::Event(InferenceEvent::ToolUse(calls)),
+                            })
+                            .await;
+                    }
+                    Ok(event) => {
+                        let _ = output_tx
+                            .send(BrainstemOutput {
+                                id: Some(request_id.to_string()),
+                                body: BrainstemBody::Event(event),
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = output_tx
+                            .send(BrainstemOutput {
+                                id: Some(request_id.to_string()),
+                                body: BrainstemBody::Error(e.to_string()),
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            }
+
+            if !got_tool_use || pending_tool_calls.is_empty() {
+                // No tool calls — inference is complete
+                return;
+            }
+
+            // Execute tool calls if we have an executor
+            if let Some(ref executor) = self.tool_executor {
+                // Append assistant message with tool calls to conversation
+                messages.push(ChatMessage {
+                    role: ChatRole::Assistant,
+                    content: ChatContent::ToolCalls(pending_tool_calls.clone()),
+                });
+
+                // Execute each tool call and append results
+                for call in &pending_tool_calls {
+                    let result = match executor.execute(call).await {
+                        Ok(r) => r,
+                        Err(e) => rusty_genius_core::protocol::ToolResult {
+                            call_id: call.id.clone(),
+                            content: format!("Tool execution error: {}", e),
+                            is_error: true,
+                        },
+                    };
+
+                    // Forward tool result as an event
+                    let _ = output_tx
+                        .send(BrainstemOutput {
+                            id: Some(request_id.to_string()),
+                            body: BrainstemBody::Event(InferenceEvent::Content(format!(
+                                "[tool_result:{}] {}",
+                                result.call_id, result.content
+                            ))),
+                        })
+                        .await;
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::Tool,
+                        content: ChatContent::ToolResult(result),
+                    });
+                }
+                // Loop back to re-infer with tool results
+            } else {
+                // No executor — emit ToolCallRequest for external handling
+                let _ = output_tx
+                    .send(BrainstemOutput {
+                        id: Some(request_id.to_string()),
+                        body: BrainstemBody::ToolCallRequest {
+                            session_id: request_id.to_string(),
+                            calls: pending_tool_calls,
+                        },
+                    })
+                    .await;
+                return;
+            }
+        }
+
+        // Exceeded max tool rounds
+        let _ = output_tx
+            .send(BrainstemOutput {
+                id: Some(request_id.to_string()),
+                body: BrainstemBody::Error(format!(
+                    "Exceeded maximum tool call rounds ({})",
+                    max_rounds
+                )),
+            })
+            .await;
     }
 
     // ── ListModels ──

@@ -32,6 +32,12 @@ pub struct InferenceConfig {
     pub max_tokens: Option<usize>,
     pub context_size: Option<u32>,
     pub show_thinking: bool,
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: usize,
+}
+
+fn default_max_tool_rounds() -> usize {
+    10
 }
 
 impl Default for InferenceConfig {
@@ -44,6 +50,7 @@ impl Default for InferenceConfig {
             max_tokens: None,
             context_size: Some(2048),
             show_thinking: true,
+            max_tool_rounds: default_max_tool_rounds(),
         }
     }
 }
