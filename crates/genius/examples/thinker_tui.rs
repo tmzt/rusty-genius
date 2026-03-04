@@ -629,7 +629,14 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
     // Input box
     let model_ready = matches!(app.model_status, ModelStatus::Ready(_));
     let input_display = if !model_ready {
-        " (loading model...)".to_string()
+        match &app.model_status {
+            ModelStatus::Downloading { current, total, .. } if *total > 0 => {
+                let pct = (*current as f64 / *total as f64) * 100.0;
+                format!(" (loading model... {:.0}%)", pct)
+            }
+            ModelStatus::Error(e) => format!(" (model error: {})", e),
+            _ => " (loading model...)".to_string(),
+        }
     } else if app.is_inferring {
         " (waiting for response...)".to_string()
     } else {
