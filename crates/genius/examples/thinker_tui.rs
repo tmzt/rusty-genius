@@ -24,7 +24,7 @@ compile_error!(
      --features real-engine (CPU only)"
 );
 
-use std::io;
+use std::io::{self, BufRead};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -52,6 +52,7 @@ use rusty_genius_stem::{MemoryToolExecutor, Orchestrator};
 enum Screen {
     Chat,
     MemoryBrowser,
+    Log,
 }
 
 #[derive(Clone)]
@@ -99,6 +100,9 @@ struct App {
     conversation: Vec<ChatMessage>,
     // Model loading state
     model_status: ModelStatus,
+    // Log capture
+    log_lines: Arc<std::sync::Mutex<Vec<String>>>,
+    log_scroll: u16,
 }
 
 #[derive(Clone)]
@@ -132,6 +136,36 @@ fn main() -> io::Result<()> {
 }
 
 async fn run_app() -> io::Result<()> {
+    // Capture stderr into a shared log buffer so llama.cpp output
+    // doesn't corrupt the TUI. Viewable via Ctrl-\ screen.
+    let log_lines: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    {
+        let log_lines = log_lines.clone();
+        // Redirect stderr to a pipe
+        let (read_fd, write_fd) = os_pipe::pipe().expect("failed to create stderr pipe");
+        // Replace stderr fd
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::dup2(write_fd.as_raw_fd(), 2);
+        }
+        drop(write_fd); // close our copy; fd 2 keeps the write end open
+        // Spawn a thread to read from the pipe
+        std::thread::spawn(move || {
+            let reader = io::BufReader::new(read_fd);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if let Ok(mut lines) = log_lines.lock() {
+                        lines.push(line);
+                        // Cap at 10000 lines
+                        if lines.len() > 10000 {
+                            lines.drain(..1000);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // Set up memory store + embedder
     let store = Arc::new(InMemoryMemoryStore::new());
     let embedder = Arc::new(MockEmbeddingProvider::new(384));
@@ -199,6 +233,8 @@ async fn run_app() -> io::Result<()> {
         tool_defs,
         conversation: Vec::new(),
         model_status: ModelStatus::NotLoaded,
+        log_lines: log_lines.clone(),
+        log_scroll: 0,
     };
 
     // Send LoadModel to pre-load and trigger download if needed
@@ -381,9 +417,20 @@ fn handle_brainstem_output(app: &mut App, msg: BrainstemOutput) {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) {
+    // Ctrl-\ toggles log screen from anywhere
+    if key.code == KeyCode::Char('\\') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.screen = if app.screen == Screen::Log {
+            Screen::Chat
+        } else {
+            Screen::Log
+        };
+        return;
+    }
+
     match app.screen {
         Screen::Chat => handle_chat_key(app, key),
         Screen::MemoryBrowser => handle_memory_key(app, key),
+        Screen::Log => handle_log_key(app, key),
     }
 }
 
@@ -420,6 +467,28 @@ fn handle_chat_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Down => {
             app.chat_scroll = app.chat_scroll.saturating_add(1);
+        }
+        _ => {}
+    }
+}
+
+fn handle_log_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.screen = Screen::Chat;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.log_scroll = app.log_scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.log_scroll = app.log_scroll.saturating_add(1);
+        }
+        KeyCode::Char('G') => {
+            // Jump to bottom
+            app.log_scroll = u16::MAX;
+        }
+        KeyCode::Char('g') => {
+            app.log_scroll = 0;
         }
         _ => {}
     }
@@ -526,6 +595,7 @@ fn draw_ui(f: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Chat => draw_chat(f, app),
         Screen::MemoryBrowser => draw_memory_browser(f, app),
+        Screen::Log => draw_log(f, app),
     }
 }
 
@@ -545,7 +615,7 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
     // Header
     let engine_name = if cfg!(feature = "real-engine") { "llama.cpp" } else { "pinky" };
     let header = Paragraph::new(format!(
-        " rusty-genius  |  {}  |  ^M: Memory  ^D: Debug  ^C: Quit",
+        " rusty-genius  |  {}  |  ^M: Memory  ^D: Debug  ^\\: Log  ^C: Quit",
         engine_name,
     ))
     .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
@@ -781,4 +851,51 @@ fn draw_memory_browser(f: &mut Frame, app: &mut App) {
         )
         .wrap(Wrap { trim: false });
     f.render_widget(detail, content_chunks[1]);
+}
+
+fn draw_log(f: &mut Frame, app: &mut App) {
+    let area = f.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Min(5),   // Log content
+        ])
+        .split(area);
+
+    let header = Paragraph::new(
+        " Engine Log  |  j/k: Scroll  |  g/G: Top/Bottom  |  Ctrl-\\: Back",
+    )
+    .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+    .block(Block::default().borders(Borders::ALL));
+    f.render_widget(header, chunks[0]);
+
+    let log_area = chunks[1];
+    let inner_height = log_area.height.saturating_sub(2);
+
+    let lines: Vec<Line> = if let Ok(log) = app.log_lines.lock() {
+        log.iter()
+            .map(|l| Line::from(Span::styled(l.as_str(), Style::default().fg(Color::DarkGray))))
+            .collect()
+    } else {
+        vec![Line::from("(log lock failed)")]
+    };
+
+    let total = lines.len() as u16;
+    // Auto-scroll to bottom unless user scrolled up
+    if app.log_scroll == u16::MAX || app.log_scroll > total.saturating_sub(inner_height) {
+        app.log_scroll = total.saturating_sub(inner_height);
+    }
+
+    let log_widget = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(format!(" Log ({} lines) ", total))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red)),
+        )
+        .scroll((app.log_scroll, 0))
+        .wrap(Wrap { trim: false });
+    f.render_widget(log_widget, log_area);
 }
