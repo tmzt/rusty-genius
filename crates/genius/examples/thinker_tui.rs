@@ -40,8 +40,8 @@ use ratatui::widgets::*;
 use rusty_genius_core::manifest::InferenceConfig;
 use rusty_genius_core::memory::{InMemoryMemoryStore, MemoryObject, MemoryObjectType, MockEmbeddingProvider};
 use rusty_genius_core::protocol::{
-    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ChatContent, ChatMessage,
-    ChatRole, InferenceEvent,
+    AssetEvent, BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ChatContent,
+    ChatMessage, ChatRole, InferenceEvent,
 };
 use rusty_genius_core::tools::ToolExecutor;
 use rusty_genius_stem::{MemoryToolExecutor, Orchestrator};
@@ -97,6 +97,17 @@ struct App {
     tool_defs: Vec<rusty_genius_core::protocol::ToolDefinition>,
     // Conversation messages for multi-turn
     conversation: Vec<ChatMessage>,
+    // Model loading state
+    model_status: ModelStatus,
+}
+
+#[derive(Clone)]
+enum ModelStatus {
+    NotLoaded,
+    Downloading { name: String, current: u64, total: u64 },
+    Loading(String),
+    Ready(String),
+    Error(String),
 }
 
 impl App {
@@ -187,7 +198,23 @@ async fn run_app() -> io::Result<()> {
         show_debug: false,
         tool_defs,
         conversation: Vec::new(),
+        model_status: ModelStatus::NotLoaded,
     };
+
+    // Send LoadModel to pre-load and trigger download if needed
+    {
+        let model_name = "qwen-2.5-7b-instruct".to_string();
+        let mut tx = app.inference_tx.clone();
+        smol::block_on(async {
+            let _ = tx
+                .send(BrainstemInput {
+                    id: Some("model-load".to_string()),
+                    command: BrainstemCommand::LoadModel(model_name.clone()),
+                })
+                .await;
+        });
+        app.model_status = ModelStatus::Loading("qwen-2.5-7b-instruct".to_string());
+    }
 
     // Main loop
     while !app.should_quit {
@@ -300,6 +327,31 @@ fn handle_brainstem_output(app: &mut App, msg: BrainstemOutput) {
             }
             InferenceEvent::Embedding(_) => {}
         },
+        BrainstemBody::Asset(event) => match event {
+            AssetEvent::Started(name) => {
+                app.model_status = ModelStatus::Downloading {
+                    name,
+                    current: 0,
+                    total: 0,
+                };
+            }
+            AssetEvent::Progress(current, total) => {
+                if let ModelStatus::Downloading { ref name, .. } = app.model_status {
+                    app.model_status = ModelStatus::Downloading {
+                        name: name.clone(),
+                        current,
+                        total,
+                    };
+                }
+            }
+            AssetEvent::Complete(path) => {
+                let short = path.rsplit('/').next().unwrap_or(&path).to_string();
+                app.model_status = ModelStatus::Ready(short);
+            }
+            AssetEvent::Error(e) => {
+                app.model_status = ModelStatus::Error(e);
+            }
+        },
         BrainstemBody::Error(e) => {
             app.chat_log.push(ChatEntry {
                 role: EntryRole::System,
@@ -343,7 +395,8 @@ fn handle_chat_key(app: &mut App, key: KeyEvent) {
             app.input.pop();
         }
         KeyCode::Enter => {
-            if !app.input.is_empty() && !app.is_inferring {
+            let model_ready = matches!(app.model_status, ModelStatus::Ready(_));
+            if !app.input.is_empty() && !app.is_inferring && model_ready {
                 send_message(app);
             }
         }
@@ -470,21 +523,15 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
             Constraint::Length(3),  // Header
             Constraint::Min(5),    // Chat log
             Constraint::Length(3), // Input
+            Constraint::Length(1), // Status bar
         ])
         .split(area);
 
     // Header
     let engine_name = if cfg!(feature = "real-engine") { "llama.cpp" } else { "pinky" };
-    let status = if let Some(since) = app.thinking_since {
-        format!("Thinking... {:.1}s", since.elapsed().as_secs_f64())
-    } else {
-        "ready".to_string()
-    };
-    let debug_tag = if app.show_debug { " [DBG]" } else { "" };
-    let model_name = if cfg!(feature = "real-engine") { "qwen-2.5-7b" } else { "stub" };
     let header = Paragraph::new(format!(
-        " rusty-genius  |  {}/{}  |  {}{}  |  ^M: Memory  ^D: Debug  ^C: Quit",
-        engine_name, model_name, status, debug_tag
+        " rusty-genius  |  {}  |  ^M: Memory  ^D: Debug  ^C: Quit",
+        engine_name,
     ))
     .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
     .block(Block::default().borders(Borders::ALL));
@@ -565,7 +612,10 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
     f.render_widget(chat_widget, chat_area);
 
     // Input box
-    let input_display = if app.is_inferring {
+    let model_ready = matches!(app.model_status, ModelStatus::Ready(_));
+    let input_display = if !model_ready {
+        " (loading model...)".to_string()
+    } else if app.is_inferring {
         " (waiting for response...)".to_string()
     } else {
         format!(" > {}", app.input)
@@ -575,7 +625,7 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
             Block::default()
                 .title(" Input [Enter: Send] ")
                 .borders(Borders::ALL)
-                .border_style(if app.is_inferring {
+                .border_style(if app.is_inferring || !model_ready {
                     Style::default().fg(Color::DarkGray)
                 } else {
                     Style::default().fg(Color::Cyan)
@@ -584,12 +634,43 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
     f.render_widget(input_widget, chunks[2]);
 
     // Show cursor position in input box
-    if !app.is_inferring {
+    if !app.is_inferring && model_ready {
         f.set_cursor_position((
             chunks[2].x + app.input.len() as u16 + 4, // " > " + cursor
             chunks[2].y + 1,
         ));
     }
+
+    // Status bar (bottom, like Claude Code)
+    let model_part = match &app.model_status {
+        ModelStatus::NotLoaded => "model: not loaded".to_string(),
+        ModelStatus::Downloading { name, current, total } => {
+            if *total > 0 {
+                let pct = (*current as f64 / *total as f64) * 100.0;
+                let mb_cur = *current as f64 / 1_048_576.0;
+                let mb_tot = *total as f64 / 1_048_576.0;
+                format!("downloading {} {:.0}% ({:.0}/{:.0} MB)", name, pct, mb_cur, mb_tot)
+            } else {
+                format!("downloading {}...", name)
+            }
+        }
+        ModelStatus::Loading(name) => format!("loading {}...", name),
+        ModelStatus::Ready(name) => format!("model: {}", name),
+        ModelStatus::Error(e) => format!("model error: {}", e),
+    };
+
+    let activity_part = if let Some(since) = app.thinking_since {
+        format!("  Thinking... {:.1}s", since.elapsed().as_secs_f64())
+    } else {
+        String::new()
+    };
+
+    let debug_tag = if app.show_debug { "  [DBG]" } else { "" };
+
+    let status_text = format!(" {}{}{}",  model_part, activity_part, debug_tag);
+    let status_bar = Paragraph::new(status_text)
+        .style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+    f.render_widget(status_bar, chunks[3]);
 }
 
 fn draw_memory_browser(f: &mut Frame, app: &mut App) {
