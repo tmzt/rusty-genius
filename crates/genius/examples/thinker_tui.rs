@@ -282,6 +282,8 @@ fn drain_events(app: &mut App) {
 }
 
 fn handle_brainstem_output(app: &mut App, msg: BrainstemOutput) {
+    let is_model_load = msg.id.as_deref() == Some("model-load");
+
     match msg.body {
         BrainstemBody::Event(event) => match event {
             InferenceEvent::ProcessStart => {}
@@ -322,8 +324,17 @@ fn handle_brainstem_output(app: &mut App, msg: BrainstemOutput) {
                 }
             }
             InferenceEvent::Complete => {
-                app.is_inferring = false;
-                app.thinking_since = None;
+                if is_model_load {
+                    // Model finished loading
+                    if let ModelStatus::Loading(ref name) = app.model_status {
+                        app.model_status = ModelStatus::Ready(name.clone());
+                    } else {
+                        app.model_status = ModelStatus::Ready("loaded".to_string());
+                    }
+                } else {
+                    app.is_inferring = false;
+                    app.thinking_since = None;
+                }
             }
             InferenceEvent::Embedding(_) => {}
         },
@@ -346,20 +357,24 @@ fn handle_brainstem_output(app: &mut App, msg: BrainstemOutput) {
             }
             AssetEvent::Complete(path) => {
                 let short = path.rsplit('/').next().unwrap_or(&path).to_string();
-                app.model_status = ModelStatus::Ready(short);
+                app.model_status = ModelStatus::Loading(short);
             }
             AssetEvent::Error(e) => {
                 app.model_status = ModelStatus::Error(e);
             }
         },
         BrainstemBody::Error(e) => {
-            app.chat_log.push(ChatEntry {
-                role: EntryRole::System,
-                content: format!("Error: {}", e),
-                kind: EntryKind::Message,
-            });
-            app.is_inferring = false;
-            app.thinking_since = None;
+            if is_model_load {
+                app.model_status = ModelStatus::Error(e);
+            } else {
+                app.chat_log.push(ChatEntry {
+                    role: EntryRole::System,
+                    content: format!("Error: {}", e),
+                    kind: EntryKind::Message,
+                });
+                app.is_inferring = false;
+                app.thinking_since = None;
+            }
         }
         _ => {}
     }

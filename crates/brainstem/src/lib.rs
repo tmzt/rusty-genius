@@ -262,6 +262,12 @@ impl Orchestrator {
                 .await;
         } else {
             self.last_model_name = Some(name_or_path);
+            let _ = output_tx
+                .send(BrainstemOutput {
+                    id: Some(request_id.to_string()),
+                    body: BrainstemBody::Event(InferenceEvent::Complete),
+                })
+                .await;
         }
     }
 
@@ -281,6 +287,12 @@ impl Orchestrator {
                 .await;
         } else {
             self.last_model_name = Some(name_or_path);
+            let _ = output_tx
+                .send(BrainstemOutput {
+                    id: Some(request_id.to_string()),
+                    body: BrainstemBody::Event(InferenceEvent::Complete),
+                })
+                .await;
         }
     }
 
