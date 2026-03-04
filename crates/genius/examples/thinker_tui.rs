@@ -5,13 +5,15 @@
 //!   - Memory browser: view/delete stored memories
 //!
 //! Run (macOS with Metal):
-//!   cargo run -p rusty-genius --features metal --example thinker_tui
+//!   cargo run -p rusty-genius --features metal --example thinker_tui -- [MODEL]
 //!
 //! Run (Linux with CUDA):
-//!   cargo run -p rusty-genius --features cuda --example thinker_tui
+//!   cargo run -p rusty-genius --features cuda --example thinker_tui -- [MODEL]
 //!
 //! Run (CPU only):
-//!   cargo run -p rusty-genius --features real-engine --example thinker_tui
+//!   cargo run -p rusty-genius --features real-engine --example thinker_tui -- [MODEL]
+//!
+//! MODEL defaults to "qwen-2.5-7b-instruct" (from facecrab registry).
 
 #[cfg(not(feature = "real-engine"))]
 compile_error!(
@@ -433,7 +435,7 @@ fn send_message(app: &mut App) {
 
     // Send InferWithTools command
     let cmd = BrainstemCommand::InferWithTools {
-        model: None,
+        model: Some("qwen-2.5-7b-instruct".to_string()),
         messages: app.conversation.clone(),
         tools: app.tool_defs.clone(),
         config: InferenceConfig::default(),
@@ -479,9 +481,10 @@ fn draw_chat(f: &mut Frame, app: &mut App) {
         "ready".to_string()
     };
     let debug_tag = if app.show_debug { " [DBG]" } else { "" };
+    let model_name = if cfg!(feature = "real-engine") { "qwen-2.5-7b" } else { "stub" };
     let header = Paragraph::new(format!(
-        " rusty-genius Thinker  |  Engine: {}  |  {}{}  |  ^M: Memory  ^D: Debug  ^C: Quit",
-        engine_name, status, debug_tag
+        " rusty-genius  |  {}/{}  |  {}{}  |  ^M: Memory  ^D: Debug  ^C: Quit",
+        engine_name, model_name, status, debug_tag
     ))
     .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
     .block(Block::default().borders(Borders::ALL));
