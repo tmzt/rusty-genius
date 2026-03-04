@@ -12,7 +12,10 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 use rusty_genius_core::manifest::InferenceConfig;
-use rusty_genius_core::protocol::{InferenceEvent, ThoughtEvent};
+use rusty_genius_core::protocol::{
+    ChatContent, ChatMessage, ChatRole, InferenceEvent, ThoughtEvent, ToolCall, ToolDefinition,
+};
+use futures::StreamExt;
 use std::num::NonZeroU32;
 use std::sync::{Arc, OnceLock};
 
@@ -69,7 +72,7 @@ impl Engine for Brain {
     }
 
     fn default_model(&self) -> String {
-        "Qwen/Qwen2.5-1.5B-Instruct".to_string()
+        "qwen-2.5-7b-instruct".to_string()
     }
 
     async fn infer(
@@ -327,4 +330,184 @@ impl Engine for Brain {
 
         Ok(rx)
     }
+
+    fn supports_tool_use(&self) -> bool {
+        true
+    }
+
+    async fn infer_with_tools(
+        &mut self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+        config: InferenceConfig,
+    ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
+        let prompt = format_qwen_chat(messages, tools);
+        let mut inner_rx = self.infer(&prompt, config).await?;
+
+        let (mut tx, rx) = mpsc::channel(100);
+
+        smol::spawn(async move {
+            let mut content_buf = String::new();
+
+            while let Some(event) = inner_rx.next().await {
+                match event {
+                    Ok(InferenceEvent::Content(text)) => {
+                        content_buf.push_str(&text);
+                        // Stream content through for responsiveness
+                        let _ = tx.send(Ok(InferenceEvent::Content(text))).await;
+                    }
+                    Ok(InferenceEvent::Complete) => {
+                        // Check accumulated content for tool calls
+                        if content_buf.contains("<tool_call>") {
+                            let calls = parse_tool_calls(&content_buf);
+                            if !calls.is_empty() {
+                                let _ =
+                                    tx.send(Ok(InferenceEvent::ToolUse(calls))).await;
+                            }
+                        }
+                        let _ = tx.send(Ok(InferenceEvent::Complete)).await;
+                    }
+                    other => {
+                        let _ = tx.send(other).await;
+                    }
+                }
+            }
+        })
+        .detach();
+
+        Ok(rx)
+    }
+}
+
+/// Format a conversation into the Qwen chat template with tool definitions.
+fn format_qwen_chat(messages: &[ChatMessage], tools: &[ToolDefinition]) -> String {
+    let mut prompt = String::new();
+
+    // System message
+    prompt.push_str("<|im_start|>system\n");
+
+    let has_system = messages.iter().any(|m| matches!(m.role, ChatRole::System));
+    if has_system {
+        for msg in messages {
+            if matches!(msg.role, ChatRole::System) {
+                if let ChatContent::Text(t) = &msg.content {
+                    prompt.push_str(t);
+                    prompt.push('\n');
+                }
+            }
+        }
+    } else {
+        prompt.push_str("You are a helpful assistant.\n");
+    }
+
+    // Tool definitions
+    if !tools.is_empty() {
+        prompt.push_str("\n# Tools\n\n");
+        prompt.push_str(
+            "You may call one or more functions to assist with the user query.\n\n",
+        );
+        prompt.push_str("You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n");
+        for tool in tools {
+            let tool_json = serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": &tool.name,
+                    "description": &tool.description,
+                    "parameters": &tool.parameters,
+                }
+            });
+            prompt.push_str(
+                &serde_json::to_string(&tool_json).unwrap_or_default(),
+            );
+            prompt.push('\n');
+        }
+        prompt.push_str("</tools>\n\n");
+        prompt.push_str("For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n");
+        prompt.push_str("<tool_call>\n{\"name\": \"function_name\", \"arguments\": {\"arg1\": \"value1\"}}\n</tool_call>\n");
+    }
+
+    prompt.push_str("<|im_end|>\n");
+
+    // Conversation messages (skip system, already handled)
+    for msg in messages {
+        match msg.role {
+            ChatRole::System => continue,
+            ChatRole::User => {
+                prompt.push_str("<|im_start|>user\n");
+                if let ChatContent::Text(t) = &msg.content {
+                    prompt.push_str(t);
+                }
+                prompt.push_str("<|im_end|>\n");
+            }
+            ChatRole::Assistant => {
+                prompt.push_str("<|im_start|>assistant\n");
+                match &msg.content {
+                    ChatContent::Text(t) => prompt.push_str(t),
+                    ChatContent::ToolCalls(calls) => {
+                        for call in calls {
+                            prompt.push_str("<tool_call>\n");
+                            let call_json = serde_json::json!({
+                                "name": &call.name,
+                                "arguments": &call.arguments,
+                            });
+                            prompt.push_str(
+                                &serde_json::to_string(&call_json).unwrap_or_default(),
+                            );
+                            prompt.push_str("\n</tool_call>\n");
+                        }
+                    }
+                    _ => {}
+                }
+                prompt.push_str("<|im_end|>\n");
+            }
+            ChatRole::Tool => {
+                prompt.push_str("<|im_start|>user\n<tool_response>\n");
+                if let ChatContent::ToolResult(result) = &msg.content {
+                    prompt.push_str(&result.content);
+                }
+                prompt.push_str("\n</tool_response><|im_end|>\n");
+            }
+        }
+    }
+
+    // Start the assistant turn
+    prompt.push_str("<|im_start|>assistant\n");
+    prompt
+}
+
+/// Parse `<tool_call>...</tool_call>` blocks from model output into `ToolCall`s.
+fn parse_tool_calls(text: &str) -> Vec<ToolCall> {
+    let mut calls = Vec::new();
+    let mut remaining = text;
+
+    while let Some(start_idx) = remaining.find("<tool_call>") {
+        let after_tag = &remaining[start_idx + "<tool_call>".len()..];
+        if let Some(end_idx) = after_tag.find("</tool_call>") {
+            let inner = after_tag[..end_idx].trim();
+
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(inner) {
+                let name = parsed
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let arguments = parsed
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+                calls.push(ToolCall {
+                    id: format!("call-{}", calls.len()),
+                    name,
+                    arguments,
+                });
+            }
+
+            remaining = &after_tag[end_idx + "</tool_call>".len()..];
+        } else {
+            break;
+        }
+    }
+
+    calls
 }
