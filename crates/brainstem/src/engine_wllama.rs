@@ -247,6 +247,7 @@ impl Engine for WllamaEngine {
 
     async fn infer(
         &mut self,
+        _model: Option<&str>,
         prompt: &str,
         _config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
@@ -297,6 +298,7 @@ impl Engine for WllamaEngine {
 
     async fn embed(
         &mut self,
+        _model: Option<&str>,
         input: &str,
         _config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {

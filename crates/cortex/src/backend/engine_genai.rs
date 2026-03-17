@@ -253,6 +253,7 @@ impl Engine for GeminiEngine {
 
     async fn infer(
         &mut self,
+        _model: Option<&str>,
         prompt: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
@@ -344,6 +345,7 @@ impl Engine for GeminiEngine {
 
     async fn embed(
         &mut self,
+        _model: Option<&str>,
         input: &str,
         _config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {

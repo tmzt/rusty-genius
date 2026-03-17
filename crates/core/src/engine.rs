@@ -19,18 +19,20 @@ pub trait Engine: Send + Sync {
     /// Get the default model name for this engine
     fn default_model(&self) -> String;
 
-    /// Run inference
-    /// Returns a channel of InferenceEvents
+    /// Run inference. If `model` is Some, use that model (must already
+    /// be loaded or on disk). If None, use the current/default model.
     async fn infer(
         &mut self,
+        model: Option<&str>,
         prompt: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
 
-    /// Generate embeddings
-    /// Returns a channel of InferenceEvents (will emit Embedding event)
+    /// Generate embeddings. If `model` is Some, use that model (must already
+    /// be loaded or on disk). If None, use the current/default model.
     async fn embed(
         &mut self,
+        model: Option<&str>,
         input: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;

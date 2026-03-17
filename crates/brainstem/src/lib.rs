@@ -20,6 +20,7 @@ use rusty_genius_core::engine::Engine;
 use rusty_genius_core::protocol::{
     BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ModelDescriptor,
 };
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "cortex-engine")]
@@ -41,6 +42,8 @@ pub struct Orchestrator {
     strategy: CortexStrategy,
     last_activity: Instant,
     last_model_name: Option<String>,
+    /// Maps model registry names to resolved file paths.
+    model_paths: HashMap<String, String>,
 }
 
 impl Orchestrator {
@@ -54,6 +57,7 @@ impl Orchestrator {
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
             last_model_name: None,
+            model_paths: HashMap::new(),
         })
     }
 
@@ -65,6 +69,7 @@ impl Orchestrator {
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
             last_model_name: None,
+            model_paths: HashMap::new(),
         })
     }
 
@@ -77,7 +82,14 @@ impl Orchestrator {
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
             last_model_name: None,
+            model_paths: HashMap::new(),
         }
+    }
+
+    /// Resolve a model name to its file path. If already resolved, returns
+    /// the cached path. Otherwise returns the name as-is (may be a path).
+    fn resolve_model_path(&self, name: &str) -> String {
+        self.model_paths.get(name).cloned().unwrap_or_else(|| name.to_string())
     }
 
     pub fn set_strategy(&mut self, strategy: CortexStrategy) {
@@ -231,6 +243,7 @@ impl Orchestrator {
                 })
                 .await;
         } else {
+            self.model_paths.insert(name_or_path.clone(), path_to_load);
             self.last_model_name = Some(name_or_path);
         }
     }
@@ -254,43 +267,45 @@ impl Orchestrator {
         }
     }
 
-    // ── Ensure model loaded (cold reload) ──
+    // ── Ensure model is in local file cache ──
 
+    /// Resolve the model name to a local file path, ensuring it exists in
+    /// the file cache. Does NOT load the model into the engine — the engine
+    /// lazy-loads on first infer/embed call. Returns false if the model
+    /// cannot be found or resolved.
     #[cfg(feature = "cortex-engine")]
-    async fn ensure_model_loaded(
+    async fn ensure_model_cached(
         &mut self,
         model: Option<String>,
         request_id: &str,
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) -> bool {
-        if self.engine.is_loaded() {
-            return true;
-        }
-        let model_to_load = model
+        let model_name = model
             .or_else(|| self.last_model_name.clone())
             .unwrap_or_else(|| self.engine.default_model());
 
-        let start = Instant::now();
-        match self.asset_authority.ensure_model(&model_to_load).await {
+        // Already resolved — file path is known.
+        if self.model_paths.contains_key(&model_name) {
+            self.last_model_name = Some(model_name);
+            return true;
+        }
+
+        // Resolve via asset authority (checks local cache, does NOT download).
+        match self.asset_authority.ensure_model(&model_name).await {
             Ok(path) => {
-                if let Err(e) = self.engine.load_model(path.to_str().unwrap()).await {
-                    let _ = output_tx
-                        .send(BrainstemOutput {
-                            id: Some(request_id.to_string()),
-                            body: BrainstemBody::Error(format!("Cold reload failed: {}", e)),
-                        })
-                        .await;
-                    return false;
-                }
-                self.last_model_name = Some(model_to_load);
-                eprintln!("NOTICE: Model reload took {:?}.", start.elapsed());
+                let path_str = path.to_str().unwrap().to_string();
+                self.model_paths.insert(model_name.clone(), path_str);
+                self.last_model_name = Some(model_name);
                 true
             }
             Err(e) => {
                 let _ = output_tx
                     .send(BrainstemOutput {
                         id: Some(request_id.to_string()),
-                        body: BrainstemBody::Error(format!("Cold reload asset fail: {}", e)),
+                        body: BrainstemBody::Error(format!(
+                            "Model '{}' not found in cache: {}",
+                            model_name, e
+                        )),
                     })
                     .await;
                 false
@@ -299,29 +314,24 @@ impl Orchestrator {
     }
 
     #[cfg(not(feature = "cortex-engine"))]
-    async fn ensure_model_loaded(
+    async fn ensure_model_cached(
         &mut self,
         model: Option<String>,
         request_id: &str,
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) -> bool {
-        if self.engine.is_loaded() {
-            return true;
-        }
-        let model_to_load = model
+        let model_name = model
             .or_else(|| self.last_model_name.clone())
             .unwrap_or_else(|| self.engine.default_model());
 
-        if let Err(e) = self.engine.load_model(&model_to_load).await {
-            let _ = output_tx
-                .send(BrainstemOutput {
-                    id: Some(request_id.to_string()),
-                    body: BrainstemBody::Error(format!("Cold reload failed: {}", e)),
-                })
-                .await;
-            return false;
+        if self.model_paths.contains_key(&model_name) {
+            self.last_model_name = Some(model_name);
+            return true;
         }
-        self.last_model_name = Some(model_to_load);
+
+        // Without cortex-engine, assume the name is a valid path.
+        self.model_paths.insert(model_name.clone(), model_name.clone());
+        self.last_model_name = Some(model_name);
         true
     }
 
@@ -336,13 +346,14 @@ impl Orchestrator {
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) {
         if !self
-            .ensure_model_loaded(model, request_id, output_tx)
+            .ensure_model_cached(model, request_id, output_tx)
             .await
         {
             return;
         }
 
-        match self.engine.infer(&prompt, config).await {
+        let resolved = self.last_model_name.as_ref().map(|n| self.resolve_model_path(n));
+        match self.engine.infer(resolved.as_deref(), &prompt, config).await {
             Ok(mut event_rx) => {
                 while let Some(event_res) = event_rx.next().await {
                     match event_res {
@@ -391,13 +402,14 @@ impl Orchestrator {
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) {
         if !self
-            .ensure_model_loaded(model, request_id, output_tx)
+            .ensure_model_cached(model, request_id, output_tx)
             .await
         {
             return;
         }
 
-        match self.engine.embed(&input, config).await {
+        let resolved = self.last_model_name.as_ref().map(|n| self.resolve_model_path(n));
+        match self.engine.embed(resolved.as_deref(), &input, config).await {
             Ok(mut event_rx) => {
                 while let Some(event_res) = event_rx.next().await {
                     match event_res {
