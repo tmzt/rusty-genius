@@ -118,6 +118,19 @@ impl Engine for Brain {
         "Qwen/Qwen2.5-1.5B-Instruct".to_string()
     }
 
+    async fn preload_model(&mut self, model_path: &str, purpose: &str) -> Result<()> {
+        match purpose {
+            "embed" => {
+                self.get_embed_model(model_path)?;
+            }
+            _ => {
+                // "infer" or any other purpose defaults to inference.
+                self.get_infer_model(model_path)?;
+            }
+        }
+        Ok(())
+    }
+
     async fn infer(
         &mut self,
         model: Option<&str>,

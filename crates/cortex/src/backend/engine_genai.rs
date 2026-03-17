@@ -251,6 +251,10 @@ impl Engine for GeminiEngine {
         "gemini-2.0-flash".to_string()
     }
 
+    async fn preload_model(&mut self, _model_path: &str, _purpose: &str) -> Result<()> {
+        Ok(()) // genai models are remote, no local preload
+    }
+
     async fn infer(
         &mut self,
         _model: Option<&str>,

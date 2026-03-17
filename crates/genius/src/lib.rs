@@ -86,6 +86,43 @@ impl Genius {
         Ok(())
     }
 
+    /// Preload a model into engine memory so it's ready for immediate use.
+    /// `purpose` should be "infer" or "embed".
+    pub async fn preload(
+        &mut self,
+        model: String,
+        purpose: String,
+    ) -> Result<()> {
+        let request_id = format!(
+            "facade-preload-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_micros()
+        );
+
+        self.input_tx
+            .send(BrainstemInput {
+                id: Some(request_id.clone()),
+                command: BrainstemCommand::PreloadModel { model, purpose },
+            })
+            .await?;
+
+        let output_rx = self.output_rx.clone();
+        let mut output_rx = output_rx.lock().await;
+        while let Some(output) = output_rx.next().await {
+            if output.id != Some(request_id.clone()) {
+                continue;
+            }
+            match output.body {
+                BrainstemBody::Event(InferenceEvent::Complete) => return Ok(()),
+                BrainstemBody::Error(e) => return Err(anyhow::anyhow!("{}", e)),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     pub async fn infer(
         &mut self,
         model: Option<String>,

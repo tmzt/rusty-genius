@@ -58,6 +58,9 @@ pub struct BrainstemInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BrainstemCommand {
     LoadModel(String),
+    /// Preload a model into memory for immediate use.
+    /// `purpose` is "infer" or "embed".
+    PreloadModel { model: String, purpose: String },
     Infer {
         model: Option<String>,
         prompt: String,

@@ -245,6 +245,10 @@ impl Engine for WllamaEngine {
         "wllama-default".to_string()
     }
 
+    async fn preload_model(&mut self, _model_path: &str, _purpose: &str) -> Result<()> {
+        Ok(())
+    }
+
     async fn infer(
         &mut self,
         _model: Option<&str>,

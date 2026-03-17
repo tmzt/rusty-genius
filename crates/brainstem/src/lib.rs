@@ -18,7 +18,8 @@ use futures::sink::SinkExt;
 use futures::StreamExt;
 use rusty_genius_core::engine::Engine;
 use rusty_genius_core::protocol::{
-    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, ModelDescriptor,
+    BrainstemBody, BrainstemCommand, BrainstemInput, BrainstemOutput, InferenceEvent,
+    ModelDescriptor,
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -297,6 +298,10 @@ impl Orchestrator {
                             self.handle_load_model(name_or_path, &request_id, &mut output_tx)
                                 .await;
                         }
+                        BrainstemCommand::PreloadModel { model, purpose } => {
+                            self.handle_preload_model(model, purpose, &request_id, &mut output_tx)
+                                .await;
+                        }
                         BrainstemCommand::Infer {
                             model,
                             prompt,
@@ -410,6 +415,43 @@ impl Orchestrator {
                 .await;
         } else {
             self.last_model_name = Some(name_or_path);
+        }
+    }
+
+    // ── Preload model into engine memory ──
+
+    async fn handle_preload_model(
+        &mut self,
+        model: String,
+        purpose: String,
+        request_id: &str,
+        output_tx: &mut mpsc::Sender<BrainstemOutput>,
+    ) {
+        // First ensure the model is in the file cache.
+        if !self
+            .ensure_model_cached(Some(model.clone()), request_id, output_tx)
+            .await
+        {
+            return;
+        }
+
+        // Resolve to file path and preload into the engine.
+        let path = self.resolve_model_path(&model);
+        if let Err(e) = self.engine.preload_model(&path, &purpose).await {
+            let _ = output_tx
+                .send(BrainstemOutput {
+                    id: Some(request_id.to_string()),
+                    body: BrainstemBody::Error(format!("Preload failed: {}", e)),
+                })
+                .await;
+        } else {
+            eprintln!("[preload] {} loaded for {}", model, purpose);
+            let _ = output_tx
+                .send(BrainstemOutput {
+                    id: Some(request_id.to_string()),
+                    body: BrainstemBody::Event(InferenceEvent::Complete),
+                })
+                .await;
         }
     }
 

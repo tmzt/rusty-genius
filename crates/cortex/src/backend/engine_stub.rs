@@ -41,6 +41,10 @@ impl Engine for Pinky {
         "tiny-model".to_string()
     }
 
+    async fn preload_model(&mut self, _model_path: &str, _purpose: &str) -> Result<()> {
+        Ok(())
+    }
+
     async fn infer(
         &mut self,
         _model: Option<&str>,

@@ -19,6 +19,11 @@ pub trait Engine: Send + Sync {
     /// Get the default model name for this engine
     fn default_model(&self) -> String;
 
+    /// Preload a model into memory so it's ready for immediate use.
+    /// The `purpose` hint ("infer" or "embed") tells the engine which
+    /// slot to load into. The model must already be on disk.
+    async fn preload_model(&mut self, model_path: &str, purpose: &str) -> Result<()>;
+
     /// Run inference. If `model` is Some, use that model (must already
     /// be loaded or on disk). If None, use the current/default model.
     async fn infer(
