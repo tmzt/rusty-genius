@@ -49,6 +49,11 @@ impl AssetAuthority {
         })
     }
 
+    /// Access the underlying model registry.
+    pub fn registry(&self) -> &ModelRegistry {
+        &self.registry
+    }
+
     /// List all models in the registry.
     pub fn list_models(&self) -> Vec<ModelEntry> {
         self.registry.list_models()

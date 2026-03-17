@@ -35,6 +35,144 @@ pub enum CortexStrategy {
     KeepAlive,
 }
 
+/// A resolved model entry in the local in-memory cache.
+#[derive(Debug, Clone)]
+pub struct CachedModel {
+    /// Short registry name (e.g. "nomic-embed-text").
+    pub short_name: String,
+    /// GGUF filename on disk (e.g. "nomic-embed-text-v1.5.Q4_K_M.gguf").
+    pub filename: String,
+    /// Full resolved file path.
+    pub path: String,
+}
+
+/// In-memory model cache. Allows lookup by short name, filename, or full
+/// repo:filename spec. Once a model is resolved here, `ensure_model_cached`
+/// is a noop. Persisted to `cache.toml` in the model cache directory.
+#[derive(Debug)]
+pub struct ModelCache {
+    /// All cached entries.
+    entries: Vec<CachedModel>,
+    /// Index: any known key (short name, filename, repo:filename) → entry index.
+    index: HashMap<String, usize>,
+    /// Path to cache.toml for persistence.
+    cache_file: Option<std::path::PathBuf>,
+}
+
+impl Default for ModelCache {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            index: HashMap::new(),
+            cache_file: None,
+        }
+    }
+}
+
+impl ModelCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a ModelCache backed by a cache.toml file. Loads existing
+    /// entries from disk if the file exists.
+    pub fn with_cache_dir(cache_dir: &std::path::Path) -> Self {
+        let cache_file = cache_dir.join("cache.toml");
+        let mut cache = Self {
+            entries: Vec::new(),
+            index: HashMap::new(),
+            cache_file: Some(cache_file.clone()),
+        };
+        cache.load_from_disk();
+        cache
+    }
+
+    /// Load cached entries from cache.toml.
+    fn load_from_disk(&mut self) {
+        let path = match &self.cache_file {
+            Some(p) => p,
+            None => return,
+        };
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        // Simple TOML parsing: each [[models]] section has
+        // short_name, filename, path.
+        for section in content.split("[[models]]").skip(1) {
+            let mut short_name = None;
+            let mut filename = None;
+            let mut file_path = None;
+            for line in section.lines() {
+                let line = line.trim();
+                if let Some(val) = line.strip_prefix("short_name = \"") {
+                    short_name = val.strip_suffix('"').map(|s| s.to_string());
+                } else if let Some(val) = line.strip_prefix("filename = \"") {
+                    filename = val.strip_suffix('"').map(|s| s.to_string());
+                } else if let Some(val) = line.strip_prefix("path = \"") {
+                    file_path = val.strip_suffix('"').map(|s| s.to_string());
+                }
+            }
+            if let (Some(sn), Some(fn_), Some(fp)) = (short_name, filename, file_path) {
+                // Only add if the file still exists on disk.
+                if std::path::Path::new(&fp).exists() {
+                    self.insert_no_persist(sn, fn_, fp);
+                }
+            }
+        }
+    }
+
+    /// Write all entries to cache.toml.
+    fn save_to_disk(&self) {
+        let path = match &self.cache_file {
+            Some(p) => p,
+            None => return,
+        };
+        let mut out = String::new();
+        for entry in &self.entries {
+            out.push_str("[[models]]\n");
+            out.push_str(&format!("short_name = \"{}\"\n", entry.short_name));
+            out.push_str(&format!("filename = \"{}\"\n", entry.filename));
+            out.push_str(&format!("path = \"{}\"\n\n", entry.path));
+        }
+        let _ = std::fs::write(path, out);
+    }
+
+    /// Insert without persisting (used during load_from_disk).
+    fn insert_no_persist(&mut self, short_name: String, filename: String, path: String) {
+        let idx = self.entries.len();
+        self.index.insert(short_name.clone(), idx);
+        self.index.insert(filename.clone(), idx);
+        self.index.insert(path.clone(), idx);
+        self.entries.push(CachedModel {
+            short_name,
+            filename,
+            path,
+        });
+    }
+
+    /// Insert a resolved model. Indexes by short_name, filename, and path.
+    /// Persists to cache.toml.
+    pub fn insert(&mut self, short_name: String, filename: String, path: String) {
+        // Don't duplicate.
+        if self.index.contains_key(&short_name) {
+            return;
+        }
+        self.insert_no_persist(short_name, filename, path);
+        self.save_to_disk();
+    }
+
+    /// Look up a model by any known key (short name, filename, or path).
+    pub fn get(&self, key: &str) -> Option<&CachedModel> {
+        self.index.get(key).map(|&idx| &self.entries[idx])
+    }
+
+    /// Get the resolved file path for a model key, if cached.
+    pub fn resolve_path(&self, key: &str) -> Option<&str> {
+        self.get(key).map(|e| e.path.as_str())
+    }
+}
+
 pub struct Orchestrator {
     engine: Box<dyn Engine>,
     #[cfg(feature = "cortex-engine")]
@@ -42,8 +180,8 @@ pub struct Orchestrator {
     strategy: CortexStrategy,
     last_activity: Instant,
     last_model_name: Option<String>,
-    /// Maps model registry names to resolved file paths.
-    model_paths: HashMap<String, String>,
+    /// Local in-memory model cache.
+    model_cache: ModelCache,
 }
 
 impl Orchestrator {
@@ -51,13 +189,14 @@ impl Orchestrator {
     pub async fn new() -> Result<Self> {
         let engine = rusty_genius_cortex::create_engine().await;
         let asset_authority = AssetAuthority::new()?;
+        let cache_dir = asset_authority.registry().get_cache_dir();
         Ok(Self {
             engine,
             asset_authority,
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
             last_model_name: None,
-            model_paths: HashMap::new(),
+            model_cache: ModelCache::with_cache_dir(&cache_dir),
         })
     }
 
@@ -69,7 +208,7 @@ impl Orchestrator {
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
             last_model_name: None,
-            model_paths: HashMap::new(),
+            model_cache: ModelCache::new(),
         })
     }
 
@@ -82,14 +221,17 @@ impl Orchestrator {
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
             last_model_name: None,
-            model_paths: HashMap::new(),
+            model_cache: ModelCache::new(),
         }
     }
 
-    /// Resolve a model name to its file path. If already resolved, returns
-    /// the cached path. Otherwise returns the name as-is (may be a path).
+    /// Resolve a model name to its file path via the in-memory cache.
+    /// Falls back to the name as-is if not cached (may already be a path).
     fn resolve_model_path(&self, name: &str) -> String {
-        self.model_paths.get(name).cloned().unwrap_or_else(|| name.to_string())
+        self.model_cache
+            .resolve_path(name)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| name.to_string())
     }
 
     pub fn set_strategy(&mut self, strategy: CortexStrategy) {
@@ -243,7 +385,11 @@ impl Orchestrator {
                 })
                 .await;
         } else {
-            self.model_paths.insert(name_or_path.clone(), path_to_load);
+            let filename = std::path::Path::new(&path_to_load)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| path_to_load.clone());
+            self.model_cache.insert(name_or_path.clone(), filename, path_to_load);
             self.last_model_name = Some(name_or_path);
         }
     }
@@ -284,17 +430,22 @@ impl Orchestrator {
             .or_else(|| self.last_model_name.clone())
             .unwrap_or_else(|| self.engine.default_model());
 
-        // Already resolved — file path is known.
-        if self.model_paths.contains_key(&model_name) {
+        // Already in the in-memory cache — noop.
+        if self.model_cache.get(&model_name).is_some() {
             self.last_model_name = Some(model_name);
             return true;
         }
 
-        // Resolve via asset authority (checks local cache, does NOT download).
+        // Resolve via asset authority (checks local file cache).
         match self.asset_authority.ensure_model(&model_name).await {
             Ok(path) => {
                 let path_str = path.to_str().unwrap().to_string();
-                self.model_paths.insert(model_name.clone(), path_str);
+                let filename = path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path_str.clone());
+                self.model_cache
+                    .insert(model_name.clone(), filename, path_str);
                 self.last_model_name = Some(model_name);
                 true
             }
@@ -324,13 +475,17 @@ impl Orchestrator {
             .or_else(|| self.last_model_name.clone())
             .unwrap_or_else(|| self.engine.default_model());
 
-        if self.model_paths.contains_key(&model_name) {
+        if self.model_cache.get(&model_name).is_some() {
             self.last_model_name = Some(model_name);
             return true;
         }
 
         // Without cortex-engine, assume the name is a valid path.
-        self.model_paths.insert(model_name.clone(), model_name.clone());
+        self.model_cache.insert(
+            model_name.clone(),
+            model_name.clone(),
+            model_name.clone(),
+        );
         self.last_model_name = Some(model_name);
         true
     }
