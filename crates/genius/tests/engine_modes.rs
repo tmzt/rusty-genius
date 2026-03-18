@@ -298,7 +298,6 @@ mod infer {
     }
 
     #[test]
-    #[ignore = "function-gemma KV cache slot bug in llama.cpp — use qwen tests instead"]
     fn test_infer_router_model() {
         init_logging();
         smol::block_on(async {
