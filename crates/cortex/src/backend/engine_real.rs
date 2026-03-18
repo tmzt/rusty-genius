@@ -299,9 +299,13 @@ impl Engine for Brain {
             let backend_ref = &backend;
 
             // Create context — embedding mode.
+            // Disable flash attention for embedding models to avoid
+            // ggml_mul_mat assertion failure in build_pooling on some
+            // hardware (nomic-bert + Metal).
             let ctx_params = LlamaContextParams::default()
                 .with_n_ctx(config.context_size.and_then(|s| NonZeroU32::new(s)))
-                .with_embeddings(true);
+                .with_embeddings(true)
+                .with_flash_attention_policy(0);
 
             let mut ctx = match model.new_context(backend_ref, ctx_params) {
                 Ok(c) => c,
