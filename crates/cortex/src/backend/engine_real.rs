@@ -302,10 +302,14 @@ impl Engine for Brain {
             // Disable flash attention for embedding models to avoid
             // ggml_mul_mat assertion failure in build_pooling on some
             // hardware (nomic-bert + Metal).
+            let embed_ctx_size = config.context_size.unwrap_or(512);
             let ctx_params = LlamaContextParams::default()
-                .with_n_ctx(config.context_size.and_then(|s| NonZeroU32::new(s)))
+                .with_n_ctx(NonZeroU32::new(embed_ctx_size))
+                .with_n_batch(embed_ctx_size)
+                .with_n_ubatch(embed_ctx_size)
                 .with_embeddings(true)
-                .with_flash_attention_policy(0);
+                .with_flash_attention_policy(0)
+                .with_pooling_type(llama_cpp_2::context::params::LlamaPoolingType::None);
 
             let mut ctx = match model.new_context(backend_ref, ctx_params) {
                 Ok(c) => c,
