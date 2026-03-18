@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use hf_hub::api::sync::Api;
-use mlx_rs::module::{Module, ModuleParameters, ModuleParametersExt, Param};
+use mlx_rs::module::{Module, ModuleParametersExt};
 use mlx_rs::macros::ModuleParameters;
 use mlx_rs::nn;
 use mlx_rs::ops;
@@ -17,6 +17,8 @@ use rusty_genius_core::protocol::{InferenceEvent, ThoughtEvent};
 use serde::Deserialize;
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
+
+use super::qwen35;
 
 pub const MLX_DEFAULT_MODEL: &str = "mlx-community/Qwen3.5-9B-MLX-4bit";
 
@@ -414,16 +416,65 @@ fn load_config(model_dir: &std::path::Path) -> Result<QwenConfig> {
     Ok(config)
 }
 
+fn load_qwen35_config(model_dir: &std::path::Path) -> Result<qwen35::Qwen35Config> {
+    let config_path = model_dir.join("config.json");
+    let config_str = std::fs::read_to_string(&config_path)
+        .map_err(|e| anyhow!("failed to read config.json: {e}"))?;
+    let outer: qwen35::Qwen35ConfigOuter = serde_json::from_str(&config_str)
+        .map_err(|e| anyhow!("failed to parse Qwen3.5 config: {e}"))?;
+    let config = outer.text_config;
+    log::info!(
+        "Qwen3.5 config: {}L ({}lin/{}full), {}H, head_dim={}, key_dim={}, value_dim={}",
+        config.num_hidden_layers,
+        config.layer_types.iter().filter(|t| *t == "linear_attention").count(),
+        config.layer_types.iter().filter(|t| *t == "full_attention").count(),
+        config.num_attention_heads,
+        config.head_dim,
+        config.key_dim(),
+        config.value_dim(),
+    );
+    Ok(config)
+}
+
 fn load_tokenizer(model_dir: &std::path::Path) -> Result<Tokenizer> {
     let path = model_dir.join("tokenizer.json");
     Tokenizer::from_file(&path)
         .map_err(|e| anyhow!("failed to load tokenizer: {e}"))
 }
 
+// ── Model type detection ──
+
+/// Detect whether config.json describes a Qwen3.5 (hybrid) or Qwen2 (basic) model.
+fn is_qwen35_config(model_dir: &std::path::Path) -> bool {
+    let config_path = model_dir.join("config.json");
+    let config_str = match std::fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let val: serde_json::Value = match serde_json::from_str(&config_str) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    // Qwen3.5 has text_config with layer_types
+    val.get("text_config")
+        .and_then(|tc| tc.get("layer_types"))
+        .is_some()
+}
+
+// ── Loaded model enum ──
+
+enum LoadedModel {
+    Qwen2(QwenModel),
+    Qwen35 {
+        model: qwen35::model::Qwen35Model,
+        caches: Vec<qwen35::cache::LayerCache>,
+    },
+}
+
 // ── MlxEngine: Engine trait implementation ──
 
 pub struct MlxEngine {
-    model: Option<QwenModel>,
+    loaded: Option<LoadedModel>,
     tokenizer: Option<Tokenizer>,
     model_dir: Option<PathBuf>,
     repo_id: String,
@@ -437,7 +488,7 @@ unsafe impl Sync for MlxEngine {}
 impl MlxEngine {
     pub async fn new() -> Result<Self> {
         Ok(Self {
-            model: None,
+            loaded: None,
             tokenizer: None,
             model_dir: None,
             repo_id: String::new(),
@@ -445,35 +496,41 @@ impl MlxEngine {
     }
 
     fn ensure_loaded(&mut self, repo_id: &str) -> Result<()> {
-        if self.model.is_some() && self.repo_id == repo_id {
+        if self.loaded.is_some() && self.repo_id == repo_id {
             return Ok(());
         }
 
         let model_dir = download_model(repo_id)?;
-        let config = load_config(&model_dir)?;
         let tokenizer = load_tokenizer(&model_dir)?;
 
-        log::info!("building MLX model...");
-        let mut model = QwenModel::new(config)?;
+        let loaded = if is_qwen35_config(&model_dir) {
+            log::info!("detected Qwen3.5 hybrid architecture");
+            let config = load_qwen35_config(&model_dir)?;
+            let mut model = qwen35::model::Qwen35Model::new(config)?;
+            qwen35::model::load_qwen35_weights(&mut model, &model_dir)?;
+            let caches = model.init_caches();
+            LoadedModel::Qwen35 { model, caches }
+        } else {
+            log::info!("detected Qwen2 basic architecture");
+            let config = load_config(&model_dir)?;
+            let mut model = QwenModel::new(config)?;
+            let weight_files: Vec<_> = std::fs::read_dir(&model_dir)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().map(|e| e == "safetensors").unwrap_or(false))
+                .collect();
+            if weight_files.is_empty() {
+                return Err(anyhow!("no .safetensors files found in {:?}", model_dir));
+            }
+            for shard in &weight_files {
+                log::info!("loading weights from {:?}", shard.file_name().unwrap_or_default());
+                model.load_safetensors(shard)
+                    .map_err(|e| anyhow!("failed to load {:?}: {e}", shard))?;
+            }
+            LoadedModel::Qwen2(model)
+        };
 
-        // Load weights from safetensors shards
-        let weight_files: Vec<_> = std::fs::read_dir(&model_dir)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().map(|e| e == "safetensors").unwrap_or(false))
-            .collect();
-
-        if weight_files.is_empty() {
-            return Err(anyhow!("no .safetensors files found in {:?}", model_dir));
-        }
-
-        for shard in &weight_files {
-            log::info!("loading weights from {:?}", shard.file_name().unwrap_or_default());
-            model.load_safetensors(shard)
-                .map_err(|e| anyhow!("failed to load {:?}: {e}", shard))?;
-        }
-
-        self.model = Some(model);
+        self.loaded = Some(loaded);
         self.tokenizer = Some(tokenizer);
         self.model_dir = Some(model_dir);
         self.repo_id = repo_id.to_string();
@@ -488,7 +545,7 @@ impl MlxEngine {
         max_tokens: usize,
         tx: &mut mpsc::Sender<Result<InferenceEvent>>,
     ) -> Result<()> {
-        let model = self.model.as_mut().ok_or_else(|| anyhow!("model not loaded"))?;
+        let loaded = self.loaded.as_mut().ok_or_else(|| anyhow!("model not loaded"))?;
         let tokenizer = self.tokenizer.as_ref().ok_or_else(|| anyhow!("tokenizer not loaded"))?;
 
         let encoding = tokenizer.encode(prompt, true)
@@ -501,7 +558,6 @@ impl MlxEngine {
         let _ = futures::executor::block_on(tx.send(Ok(InferenceEvent::ProcessStart)));
 
         let mut input = Array::from_slice(&token_ids, &[1, seq_len]);
-        let mut caches: Vec<Option<(Array, Array)>> = vec![None; model.config.num_hidden_layers];
         let mut in_think_block = false;
         let mut token_buffer = String::new();
 
@@ -510,17 +566,26 @@ impl MlxEngine {
             .or_else(|| tokenizer.token_to_id("<|im_end|>"))
             .unwrap_or(2);
 
+        // For Qwen2, we still use the old cache style
+        let mut qwen2_caches: Vec<Option<(Array, Array)>> = match loaded {
+            LoadedModel::Qwen2(m) => vec![None; m.config.num_hidden_layers],
+            LoadedModel::Qwen35 { .. } => vec![],
+        };
+
         for _step in 0..max_tokens {
-            let (logits, new_caches) = model.forward(&input, &caches)?;
-            caches = new_caches.into_iter().map(Some).collect();
-
-            // Get last token logits and argmax
-            let last_logits = logits.index((.., -1, ..));
-            let next_token_arr = argmax_axis(&last_logits, -1, None)
-                .map_err(|e| anyhow!("argmax: {e}"))?;
-            next_token_arr.eval().map_err(|e| anyhow!("eval: {e}"))?;
-
-            let next_token = next_token_arr.as_slice::<i32>()[0];
+            let next_token = match loaded {
+                LoadedModel::Qwen2(model) => {
+                    let (logits, new_caches) = model.forward(&input, &qwen2_caches)?;
+                    qwen2_caches = new_caches.into_iter().map(Some).collect();
+                    let last_logits = logits.index((.., -1, ..));
+                    let arr = argmax_axis(&last_logits, -1, None).map_err(|e| anyhow!("{e}"))?;
+                    arr.eval().map_err(|e| anyhow!("{e}"))?;
+                    arr.as_slice::<i32>()[0]
+                }
+                LoadedModel::Qwen35 { model, caches } => {
+                    model.next_token(&input, caches)?
+                }
+            };
 
             if next_token as u32 == eos_token {
                 break;
@@ -587,7 +652,7 @@ impl Engine for MlxEngine {
     }
 
     async fn unload_model(&mut self) -> Result<()> {
-        self.model = None;
+        self.loaded = None;
         self.tokenizer = None;
         self.model_dir = None;
         self.repo_id.clear();
@@ -595,7 +660,7 @@ impl Engine for MlxEngine {
     }
 
     fn is_loaded(&self) -> bool {
-        self.model.is_some()
+        self.loaded.is_some()
     }
 
     fn default_model(&self) -> String {

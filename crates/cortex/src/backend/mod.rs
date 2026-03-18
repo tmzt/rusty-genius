@@ -5,6 +5,8 @@ mod engine_stub;
 mod engine_genai;
 
 #[cfg(feature = "mlx")]
+mod qwen35;
+#[cfg(feature = "mlx")]
 mod engine_mlx;
 
 pub use rusty_genius_core::engine::Engine;
