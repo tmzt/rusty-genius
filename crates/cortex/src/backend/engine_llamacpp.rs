@@ -95,10 +95,12 @@ impl<'a> CortexContext<'a> {
 // ── LlamaCppEngine: the Engine implementation ──
 
 pub struct LlamaCppEngine {
-    /// Cached models for inference, keyed by model path.
+    /// Cached models for inference, keyed by model ID.
     infer_models: HashMap<String, Arc<LlamaModel>>,
-    /// Cached models for embedding, keyed by model path.
+    /// Cached models for embedding, keyed by model ID.
     embed_models: HashMap<String, Arc<LlamaModel>>,
+    /// Model ID → resolved file path.
+    path_cache: HashMap<String, String>,
     backend: Arc<LlamaBackend>,
 }
 
@@ -107,29 +109,38 @@ impl LlamaCppEngine {
         Self::default()
     }
 
-    /// Get or load a model for inference.
-    fn get_infer_model(&mut self, model_path: &str) -> Result<Arc<LlamaModel>> {
-        if let Some(model) = self.infer_models.get(model_path) {
+    /// Resolve a model ID to its file path.
+    fn resolve_path(&self, model_id: &str) -> String {
+        self.path_cache.get(model_id)
+            .cloned()
+            .unwrap_or_else(|| model_id.to_string())
+    }
+
+    /// Get or load a model for inference (keyed by model ID).
+    fn get_infer_model(&mut self, model_id: &str) -> Result<Arc<LlamaModel>> {
+        if let Some(model) = self.infer_models.get(model_id) {
             return Ok(model.clone());
         }
+        let path = self.resolve_path(model_id);
         let params = LlamaModelParams::default();
-        let model = LlamaModel::load_from_file(&self.backend, model_path, &params)
-            .map_err(|e| anyhow!("Failed to load infer model {}: {}", model_path, e))?;
+        let model = LlamaModel::load_from_file(&self.backend, &path, &params)
+            .map_err(|e| anyhow!("Failed to load infer model {} ({}): {}", model_id, path, e))?;
         let model = Arc::new(model);
-        self.infer_models.insert(model_path.to_string(), model.clone());
+        self.infer_models.insert(model_id.to_string(), model.clone());
         Ok(model)
     }
 
-    /// Get or load a model for embedding.
-    fn get_embed_model(&mut self, model_path: &str) -> Result<Arc<LlamaModel>> {
-        if let Some(model) = self.embed_models.get(model_path) {
+    /// Get or load a model for embedding (keyed by model ID).
+    fn get_embed_model(&mut self, model_id: &str) -> Result<Arc<LlamaModel>> {
+        if let Some(model) = self.embed_models.get(model_id) {
             return Ok(model.clone());
         }
+        let path = self.resolve_path(model_id);
         let params = LlamaModelParams::default();
-        let model = LlamaModel::load_from_file(&self.backend, model_path, &params)
-            .map_err(|e| anyhow!("Failed to load embed model {}: {}", model_path, e))?;
+        let model = LlamaModel::load_from_file(&self.backend, &path, &params)
+            .map_err(|e| anyhow!("Failed to load embed model {} ({}): {}", model_id, path, e))?;
         let model = Arc::new(model);
-        self.embed_models.insert(model_path.to_string(), model.clone());
+        self.embed_models.insert(model_id.to_string(), model.clone());
         Ok(model)
     }
 }
@@ -139,6 +150,7 @@ impl Default for LlamaCppEngine {
         Self {
             infer_models: HashMap::new(),
             embed_models: HashMap::new(),
+            path_cache: HashMap::new(),
             backend: get_llama_backend(),
         }
     }
@@ -171,12 +183,16 @@ impl Engine for LlamaCppEngine {
         "Qwen/Qwen2.5-1.5B-Instruct".to_string()
     }
 
-    async fn preload_model(&mut self, model_path: &str, purpose: &str) -> Result<()> {
+    async fn preload_model(&mut self, model_id: &str, purpose: &str) -> Result<()> {
         match purpose {
-            "embed" => { self.get_embed_model(model_path)?; }
-            _ => { self.get_infer_model(model_path)?; }
+            "embed" => { self.get_embed_model(model_id)?; }
+            _ => { self.get_infer_model(model_id)?; }
         }
         Ok(())
+    }
+
+    fn set_model_path(&mut self, model_id: &str, path: &str) {
+        self.path_cache.insert(model_id.to_string(), path.to_string());
     }
 
     async fn infer(

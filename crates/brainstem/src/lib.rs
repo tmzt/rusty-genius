@@ -450,13 +450,12 @@ impl Orchestrator {
         request_id: &str,
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) {
-        // Ensure the model is in the file cache and resolve to file path.
-        let resolved = match self.ensure_model_cached(&model, request_id, output_tx).await {
-            Some(path) => path,
-            None => return,
-        };
+        // Ensure model files are downloaded.
+        if self.ensure_model_cached(&model, request_id, output_tx).await.is_none() {
+            return;
+        }
 
-        if let Err(e) = self.engine.preload_model(&resolved, &purpose).await {
+        if let Err(e) = self.engine.preload_model(&model, &purpose).await {
             let _ = output_tx
                 .send(BrainstemOutput {
                     id: Some(request_id.to_string()),
@@ -519,6 +518,7 @@ impl Orchestrator {
     ) -> Option<String> {
         // Already in the in-memory cache.
         if let Some(path) = self.model_cache.resolve_path(model_key) {
+            self.engine.set_model_path(model_key, path);
             return Some(path.to_string());
         }
 
@@ -532,6 +532,9 @@ impl Orchestrator {
                     .unwrap_or_else(|| path_str.clone());
                 self.model_cache
                     .insert(model_key.to_string(), filename, path_str.clone());
+                // Tell the engine about the resolved path so it can
+                // map model IDs to file paths for backends that need it.
+                self.engine.set_model_path(model_key, &path_str);
                 Some(path_str)
             }
             Err(e) => {
@@ -579,17 +582,18 @@ impl Orchestrator {
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) {
         let model_key = model.unwrap_or_else(|| self.engine.default_model());
-        let resolved = match self.ensure_model_cached(&model_key, request_id, output_tx).await {
-            Some(path) => path,
-            None => return,
-        };
-        let model_label = &resolved;
+        // Ensure model files are downloaded (facecrab caches them).
+        // The engine receives the model key, not the resolved path —
+        // each engine slot resolves paths internally.
+        if self.ensure_model_cached(&model_key, request_id, output_tx).await.is_none() {
+            return;
+        }
         log::info!(
             "infer [{}] model={} prompt_len={}",
-            request_id, model_label, prompt.len()
+            request_id, model_key, prompt.len()
         );
         log::debug!("infer [{}] prompt: {}", request_id, prompt);
-        match self.engine.infer(Some(&resolved), &prompt, config).await {
+        match self.engine.infer(Some(&model_key), &prompt, config).await {
             Ok(mut event_rx) => {
                 let mut response_len: usize = 0;
                 while let Some(event_res) = event_rx.next().await {
@@ -647,16 +651,15 @@ impl Orchestrator {
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) {
         let model_key = model.unwrap_or_else(|| self.engine.default_model());
-        let resolved = match self.ensure_model_cached(&model_key, request_id, output_tx).await {
-            Some(path) => path,
-            None => return,
-        };
+        if self.ensure_model_cached(&model_key, request_id, output_tx).await.is_none() {
+            return;
+        }
         log::info!(
             "embed [{}] model={} input_len={}",
-            request_id, resolved, input.len()
+            request_id, model_key, input.len()
         );
         log::debug!("embed [{}] input: {}", request_id, input);
-        match self.engine.embed(Some(&resolved), &input, config).await {
+        match self.engine.embed(Some(&model_key), &input, config).await {
             Ok(mut event_rx) => {
                 let mut got_embedding = false;
                 while let Some(event_res) = event_rx.next().await {

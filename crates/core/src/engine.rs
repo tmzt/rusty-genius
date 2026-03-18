@@ -41,4 +41,9 @@ pub trait Engine: Send + Sync {
         input: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>>;
+
+    /// Record the resolved file path for a model ID.
+    /// Called by the Orchestrator after downloading/caching the model.
+    /// Default: no-op (engines that handle their own resolution ignore this).
+    fn set_model_path(&mut self, _model_id: &str, _path: &str) {}
 }

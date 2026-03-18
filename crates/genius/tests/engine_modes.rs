@@ -426,3 +426,106 @@ mod resident {
         });
     }
 }
+
+// ── MLX engine tests ──
+
+#[cfg(feature = "mlx-models")]
+mod mlx {
+    use super::*;
+
+    const MLX_MODEL: &str = "mlx-community/Qwen3.5-9B-MLX-4bit";
+    const EMBEDDING_MODEL: &str = "nomic-embed-text";
+
+    #[test]
+    fn test_mlx_engine_init() {
+        init_logging();
+        smol::block_on(async {
+            let genius = Genius::with_engine_name("mlx").await;
+            assert!(genius.is_ok(), "MLX engine should init: {:?}", genius.err());
+        });
+    }
+
+    #[test]
+    fn test_mlx_embed_via_dispatch() {
+        init_logging();
+        smol::block_on(async {
+            let mut genius = Genius::with_engine_name("mlx").await.expect("init failed");
+
+            // Embedding should route to llama.cpp via DispatchEngine
+            genius
+                .preload(EMBEDDING_MODEL.to_string(), "embed".to_string())
+                .await
+                .expect("embed preload failed");
+
+            let (emb, complete) = collect_embedding(
+                &mut genius,
+                Some(EMBEDDING_MODEL.to_string()),
+                "test mlx dispatch embedding",
+            ).await;
+
+            assert!(complete, "should get Complete from llama.cpp embed path");
+            assert_eq!(emb.len(), 768, "nomic-embed-text should produce 768-dim");
+        });
+    }
+
+    #[test]
+    #[ignore = "Qwen3.5 hybrid attention architecture not yet implemented in MLX engine"]
+    fn test_mlx_infer_basic() {
+        init_logging();
+        smol::block_on(async {
+            let mut genius = Genius::with_engine_name("mlx").await.expect("init failed");
+
+            genius
+                .preload(MLX_MODEL.to_string(), "infer".to_string())
+                .await
+                .expect("MLX model preload failed");
+
+            let (content, complete) = collect_inference(
+                &mut genius,
+                Some(MLX_MODEL.to_string()),
+                "What is 2 + 2? Answer in one word.",
+            ).await;
+
+            assert!(complete, "should receive Complete event");
+            assert!(!content.is_empty(), "MLX model should produce output");
+            eprintln!("MLX output ({} chars): {:?}", content.len(), &content[..content.len().min(200)]);
+        });
+    }
+
+    #[test]
+    #[ignore = "Qwen3.5 hybrid attention architecture not yet implemented in MLX engine"]
+    fn test_mlx_dispatch_both() {
+        init_logging();
+        smol::block_on(async {
+            let mut genius = Genius::with_engine_name("mlx").await.expect("init failed");
+
+            // Preload both: embed goes to llama, infer goes to MLX
+            genius
+                .preload(EMBEDDING_MODEL.to_string(), "embed".to_string())
+                .await
+                .expect("embed preload failed");
+            genius
+                .preload(MLX_MODEL.to_string(), "infer".to_string())
+                .await
+                .expect("MLX preload failed");
+
+            // Embed via llama.cpp
+            let (emb, _) = collect_embedding(
+                &mut genius,
+                Some(EMBEDDING_MODEL.to_string()),
+                "dispatch test",
+            ).await;
+            assert_eq!(emb.len(), 768);
+
+            // Infer via MLX
+            let (content, complete) = collect_inference(
+                &mut genius,
+                Some(MLX_MODEL.to_string()),
+                "Say hello in one sentence.",
+            ).await;
+            assert!(complete);
+            assert!(!content.is_empty());
+            eprintln!("MLX+llama dispatch: embed=768d, infer={} chars", content.len());
+        });
+    }
+}

@@ -42,8 +42,10 @@ use std::collections::HashMap;
 struct EngineContext {
     /// Which engine slot owns this context.
     slot: String,
-    /// Model name/path to pass to the engine.
+    /// Model ID (registry name, e.g. "nomic-embed-text").
     model: String,
+    /// Whether this slot needs file path resolution (true for llama.cpp, false for MLX).
+    needs_path_resolution: bool,
 }
 
 /// Composite engine that owns multiple backends and routes each operation
@@ -56,10 +58,11 @@ pub struct DispatchEngine {
     /// Named engine backends (e.g. "llama", "mlx").
     slots: HashMap<String, Box<dyn Engine>>,
     /// Context key → engine context mapping.
-    /// Key format: "{purpose}-{use_case}" (e.g. "infer-thinker").
     contexts: HashMap<String, EngineContext>,
-    /// Reverse lookup: model name → context key.
+    /// Reverse lookup: model ID → context key.
     model_index: HashMap<String, String>,
+    /// Model ID → resolved file path (populated by the Orchestrator via set_model_path).
+    path_cache: HashMap<String, String>,
     /// Slot name for models with no registered context.
     default_slot: String,
 }
@@ -70,6 +73,7 @@ impl DispatchEngine {
             slots: HashMap::new(),
             contexts: HashMap::new(),
             model_index: HashMap::new(),
+            path_cache: HashMap::new(),
             default_slot: default_slot.to_string(),
         }
     }
@@ -83,37 +87,61 @@ impl DispatchEngine {
     ///
     /// `key` is `{purpose}-{use_case}` (e.g. `"infer-thinker"`).
     /// `slot` is the engine backend name (e.g. `"mlx"` or `"llama"`).
-    /// `model` is the model name/path the engine will load.
-    pub fn register(&mut self, key: &str, slot: &str, model: &str) {
-        log::info!("dispatch: {} → slot={}, model={}", key, slot, model);
+    /// `model` is the model ID (e.g. `"nomic-embed-text"`).
+    /// `needs_path` — if true, the engine needs a resolved file path (llama.cpp);
+    ///   if false, the engine handles its own resolution (MLX).
+    pub fn register(&mut self, key: &str, slot: &str, model: &str, needs_path: bool) {
+        log::info!("dispatch: {} → slot={}, model={}, needs_path={}", key, slot, model, needs_path);
         self.model_index.insert(model.to_string(), key.to_string());
         self.contexts.insert(
             key.to_string(),
             EngineContext {
                 slot: slot.to_string(),
                 model: model.to_string(),
+                needs_path_resolution: needs_path,
             },
         );
     }
 
-    /// Resolve model name → engine slot.
-    fn resolve(&mut self, model: Option<&str>) -> Result<&mut Box<dyn Engine>> {
-        let slot_name = model
-            .and_then(|m| self.model_index.get(m))
-            .and_then(|key| self.contexts.get(key))
-            .map(|ctx| ctx.slot.as_str())
-            .unwrap_or(&self.default_slot);
+    /// Record the resolved file path for a model ID (called by the Orchestrator
+    /// after ensure_model_cached downloads/resolves the model).
+    pub fn set_model_path(&mut self, model_id: &str, path: &str) {
+        self.path_cache.insert(model_id.to_string(), path.to_string());
+    }
 
-        self.slots
-            .get_mut(slot_name)
-            .ok_or_else(|| anyhow::anyhow!("no engine slot '{}'", slot_name))
+    /// Resolve model ID → (engine slot, model string to pass to engine).
+    /// For slots that need path resolution, returns the cached file path.
+    /// For slots that handle their own resolution, returns the model ID.
+    fn resolve_with_model<'a>(&'a mut self, model: Option<&str>) -> Result<(&'a mut Box<dyn Engine>, String)> {
+        let model_id = model.unwrap_or(&self.default_slot);
+
+        let (slot_name, needs_path) = self.model_index.get(model_id)
+            .and_then(|key| self.contexts.get(key))
+            .map(|ctx| (ctx.slot.as_str(), ctx.needs_path_resolution))
+            .unwrap_or((&self.default_slot, true));
+
+        let model_for_engine = if needs_path {
+            self.path_cache.get(model_id)
+                .cloned()
+                .unwrap_or_else(|| model_id.to_string())
+        } else {
+            model_id.to_string()
+        };
+
+        let slot_name = slot_name.to_string();
+        let engine = self.slots
+            .get_mut(&slot_name)
+            .ok_or_else(|| anyhow::anyhow!("no engine slot '{}'", slot_name))?;
+
+        Ok((engine, model_for_engine))
     }
 }
 
 #[async_trait]
 impl Engine for DispatchEngine {
-    async fn load_model(&mut self, model_path: &str) -> Result<()> {
-        self.resolve(Some(model_path))?.load_model(model_path).await
+    async fn load_model(&mut self, model_id: &str) -> Result<()> {
+        let (engine, resolved) = self.resolve_with_model(Some(model_id))?;
+        engine.load_model(&resolved).await
     }
 
     async fn unload_model(&mut self) -> Result<()> {
@@ -134,10 +162,9 @@ impl Engine for DispatchEngine {
             .unwrap_or_else(|| "unknown".to_string())
     }
 
-    async fn preload_model(&mut self, model_path: &str, purpose: &str) -> Result<()> {
-        self.resolve(Some(model_path))?
-            .preload_model(model_path, purpose)
-            .await
+    async fn preload_model(&mut self, model_id: &str, purpose: &str) -> Result<()> {
+        let (engine, resolved) = self.resolve_with_model(Some(model_id))?;
+        engine.preload_model(&resolved, purpose).await
     }
 
     async fn infer(
@@ -146,7 +173,8 @@ impl Engine for DispatchEngine {
         prompt: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
-        self.resolve(model)?.infer(model, prompt, config).await
+        let (engine, resolved) = self.resolve_with_model(model)?;
+        engine.infer(Some(&resolved), prompt, config).await
     }
 
     async fn embed(
@@ -155,7 +183,12 @@ impl Engine for DispatchEngine {
         input: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
-        self.resolve(model)?.embed(model, input, config).await
+        let (engine, resolved) = self.resolve_with_model(model)?;
+        engine.embed(Some(&resolved), input, config).await
+    }
+
+    fn set_model_path(&mut self, model_id: &str, path: &str) {
+        self.path_cache.insert(model_id.to_string(), path.to_string());
     }
 }
 
@@ -195,13 +228,14 @@ pub async fn create_engine_by_name(name: &str) -> Result<Box<dyn Engine>, String
             dispatch.add_slot("llama", llama);
             dispatch.add_slot("mlx", Box::new(mlx));
 
-            dispatch.register("embed-embedding", "llama", "nomic-embed-text");
+            dispatch.register("embed-embedding", "llama", "nomic-embed-text", true);
             dispatch.register(
                 "infer-router",
                 "llama",
                 "lmstudio-community/functiongemma-270m-it-GGUF:functiongemma-270m-it-F16.gguf",
+                true,
             );
-            dispatch.register("infer-thinker", "mlx", MLX_DEFAULT_MODEL);
+            dispatch.register("infer-thinker", "mlx", MLX_DEFAULT_MODEL, false);
 
             Ok(Box::new(dispatch))
         }
