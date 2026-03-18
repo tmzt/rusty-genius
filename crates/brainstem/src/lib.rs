@@ -180,8 +180,7 @@ pub struct Orchestrator {
     asset_authority: AssetAuthority,
     strategy: CortexStrategy,
     last_activity: Instant,
-    last_model_name: Option<String>,
-    /// Local in-memory model cache.
+    /// Local in-memory model cache (name → file path).
     model_cache: ModelCache,
 }
 
@@ -196,7 +195,6 @@ impl Orchestrator {
             asset_authority,
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
-            last_model_name: None,
             model_cache: ModelCache::with_cache_dir(&cache_dir),
         })
     }
@@ -208,7 +206,6 @@ impl Orchestrator {
             engine,
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
-            last_model_name: None,
             model_cache: ModelCache::new(),
         })
     }
@@ -226,7 +223,6 @@ impl Orchestrator {
             asset_authority,
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
-            last_model_name: None,
             model_cache: ModelCache::with_cache_dir(&cache_dir),
         })
     }
@@ -239,7 +235,6 @@ impl Orchestrator {
             asset_authority: AssetAuthority::new().expect("failed to create asset authority"),
             strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
             last_activity: Instant::now(),
-            last_model_name: None,
             model_cache: ModelCache::new(),
         }
     }
@@ -358,7 +353,7 @@ impl Orchestrator {
                                     })
                                     .await;
                             } else {
-                                self.last_model_name = None;
+                                
                                 let _ = output_tx
                                     .send(BrainstemOutput {
                                         id: Some(request_id),
@@ -423,7 +418,7 @@ impl Orchestrator {
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_else(|| path_to_load.clone());
             self.model_cache.insert(name_or_path.clone(), filename, path_to_load);
-            self.last_model_name = Some(name_or_path);
+            
         }
     }
 
@@ -442,7 +437,7 @@ impl Orchestrator {
                 })
                 .await;
         } else {
-            self.last_model_name = Some(name_or_path);
+            
         }
     }
 
@@ -455,17 +450,13 @@ impl Orchestrator {
         request_id: &str,
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) {
-        // First ensure the model is in the file cache.
-        if !self
-            .ensure_model_cached(Some(model.clone()), request_id, output_tx)
-            .await
-        {
-            return;
-        }
+        // Ensure the model is in the file cache and resolve to file path.
+        let resolved = match self.ensure_model_cached(&model, request_id, output_tx).await {
+            Some(path) => path,
+            None => return,
+        };
 
-        // Resolve to file path and preload into the engine.
-        let path = self.resolve_model_path(&model);
-        if let Err(e) = self.engine.preload_model(&path, &purpose).await {
+        if let Err(e) = self.engine.preload_model(&resolved, &purpose).await {
             let _ = output_tx
                 .send(BrainstemOutput {
                     id: Some(request_id.to_string()),
@@ -517,25 +508,22 @@ impl Orchestrator {
     /// the file cache. Does NOT load the model into the engine — the engine
     /// lazy-loads on first infer/embed call. Returns false if the model
     /// cannot be found or resolved.
+    /// Ensure a model is downloaded and cached. Returns the resolved file path
+    /// for the model key, or sends an error event and returns None.
     #[cfg(feature = "cortex-engine")]
     async fn ensure_model_cached(
         &mut self,
-        model: Option<String>,
+        model_key: &str,
         request_id: &str,
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
-    ) -> bool {
-        let model_name = model
-            .or_else(|| self.last_model_name.clone())
-            .unwrap_or_else(|| self.engine.default_model());
-
-        // Already in the in-memory cache — noop.
-        if self.model_cache.get(&model_name).is_some() {
-            self.last_model_name = Some(model_name);
-            return true;
+    ) -> Option<String> {
+        // Already in the in-memory cache.
+        if let Some(path) = self.model_cache.resolve_path(model_key) {
+            return Some(path.to_string());
         }
 
-        // Resolve via asset authority (checks local file cache).
-        match self.asset_authority.ensure_model(&model_name).await {
+        // Resolve via asset authority (download if needed).
+        match self.asset_authority.ensure_model(model_key).await {
             Ok(path) => {
                 let path_str = path.to_str().unwrap().to_string();
                 let filename = path
@@ -543,49 +531,41 @@ impl Orchestrator {
                     .map(|f| f.to_string_lossy().to_string())
                     .unwrap_or_else(|| path_str.clone());
                 self.model_cache
-                    .insert(model_name.clone(), filename, path_str);
-                self.last_model_name = Some(model_name);
-                true
+                    .insert(model_key.to_string(), filename, path_str.clone());
+                Some(path_str)
             }
             Err(e) => {
                 let _ = output_tx
                     .send(BrainstemOutput {
                         id: Some(request_id.to_string()),
                         body: BrainstemBody::Error(format!(
-                            "Model '{}' not found in cache: {}",
-                            model_name, e
+                            "Model '{}' not found: {}",
+                            model_key, e
                         )),
                     })
                     .await;
-                false
+                None
             }
         }
     }
 
+    /// Non-cortex fallback: model key is used as-is (assumed to be a path).
     #[cfg(not(feature = "cortex-engine"))]
     async fn ensure_model_cached(
         &mut self,
-        model: Option<String>,
+        model_key: &str,
         request_id: &str,
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
-    ) -> bool {
-        let model_name = model
-            .or_else(|| self.last_model_name.clone())
-            .unwrap_or_else(|| self.engine.default_model());
-
-        if self.model_cache.get(&model_name).is_some() {
-            self.last_model_name = Some(model_name);
-            return true;
+    ) -> Option<String> {
+        if let Some(path) = self.model_cache.resolve_path(model_key) {
+            return Some(path.to_string());
         }
-
-        // Without cortex-engine, assume the name is a valid path.
         self.model_cache.insert(
-            model_name.clone(),
-            model_name.clone(),
-            model_name.clone(),
+            model_key.to_string(),
+            model_key.to_string(),
+            model_key.to_string(),
         );
-        self.last_model_name = Some(model_name);
-        true
+        Some(model_key.to_string())
     }
 
     // ── Infer ──
@@ -598,21 +578,18 @@ impl Orchestrator {
         request_id: &str,
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) {
-        if !self
-            .ensure_model_cached(model, request_id, output_tx)
-            .await
-        {
-            return;
-        }
-
-        let resolved = self.last_model_name.as_ref().map(|n| self.resolve_model_path(n));
-        let model_label = resolved.as_deref().unwrap_or("default");
+        let model_key = model.unwrap_or_else(|| self.engine.default_model());
+        let resolved = match self.ensure_model_cached(&model_key, request_id, output_tx).await {
+            Some(path) => path,
+            None => return,
+        };
+        let model_label = &resolved;
         log::info!(
             "infer [{}] model={} prompt_len={}",
             request_id, model_label, prompt.len()
         );
         log::debug!("infer [{}] prompt: {}", request_id, prompt);
-        match self.engine.infer(resolved.as_deref(), &prompt, config).await {
+        match self.engine.infer(Some(&resolved), &prompt, config).await {
             Ok(mut event_rx) => {
                 let mut response_len: usize = 0;
                 while let Some(event_res) = event_rx.next().await {
@@ -669,21 +646,17 @@ impl Orchestrator {
         request_id: &str,
         output_tx: &mut mpsc::Sender<BrainstemOutput>,
     ) {
-        if !self
-            .ensure_model_cached(model, request_id, output_tx)
-            .await
-        {
-            return;
-        }
-
-        let resolved = self.last_model_name.as_ref().map(|n| self.resolve_model_path(n));
-        let model_label = resolved.as_deref().unwrap_or("default");
+        let model_key = model.unwrap_or_else(|| self.engine.default_model());
+        let resolved = match self.ensure_model_cached(&model_key, request_id, output_tx).await {
+            Some(path) => path,
+            None => return,
+        };
         log::info!(
             "embed [{}] model={} input_len={}",
-            request_id, model_label, input.len()
+            request_id, resolved, input.len()
         );
         log::debug!("embed [{}] input: {}", request_id, input);
-        match self.engine.embed(resolved.as_deref(), &input, config).await {
+        match self.engine.embed(Some(&resolved), &input, config).await {
             Ok(mut event_rx) => {
                 let mut got_embedding = false;
                 while let Some(event_res) = event_rx.next().await {

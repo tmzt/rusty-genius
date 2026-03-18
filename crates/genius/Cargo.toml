@@ -32,3 +32,9 @@ real-engine = ["rusty-genius-cortex/real-engine", "cortex-engine"]
 genai = ["rusty-genius-stem/genai"]
 mlx = ["rusty-genius-stem/mlx"]
 redis-context = ["rusty-genius-stem/redis-context"]
+# Enable tests that download and use real model files (cached in ~/.config/rusty-genius/cache/)
+real-models = ["real-engine", "metal"]
+
+[dev-dependencies]
+smol = "2"
+env_logger = "0.11"

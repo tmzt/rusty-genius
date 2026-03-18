@@ -61,8 +61,9 @@ impl<'a> CortexContext<'a> {
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(n_ctx))
             .with_n_batch(n_ctx)
+            .with_n_ubatch(n_ctx)
             .with_embeddings(true)
-            .with_pooling_type(LlamaPoolingType::Mean)
+            .with_pooling_type(LlamaPoolingType::None)
             .with_flash_attention_policy(0);
         let ctx = model.new_context(backend, ctx_params)
             .map_err(|e| anyhow!("Embedding context creation failed: {}", e))?;
@@ -98,8 +99,6 @@ pub struct LlamaCppEngine {
     infer_models: HashMap<String, Arc<LlamaModel>>,
     /// Cached models for embedding, keyed by model path.
     embed_models: HashMap<String, Arc<LlamaModel>>,
-    /// The currently active model path (set by load_model).
-    current_model_path: Option<String>,
     backend: Arc<LlamaBackend>,
 }
 
@@ -133,16 +132,6 @@ impl LlamaCppEngine {
         self.embed_models.insert(model_path.to_string(), model.clone());
         Ok(model)
     }
-
-    /// Resolve which model path to use: explicit override or current default.
-    fn resolve_model_path(&self, override_path: Option<&str>) -> Result<String> {
-        if let Some(p) = override_path {
-            return Ok(p.to_string());
-        }
-        self.current_model_path
-            .clone()
-            .ok_or_else(|| anyhow!("No model loaded and no override specified"))
-    }
 }
 
 impl Default for LlamaCppEngine {
@@ -150,29 +139,32 @@ impl Default for LlamaCppEngine {
         Self {
             infer_models: HashMap::new(),
             embed_models: HashMap::new(),
-            current_model_path: None,
             backend: get_llama_backend(),
         }
     }
 }
 
+impl Drop for LlamaCppEngine {
+    fn drop(&mut self) {
+        self.infer_models.clear();
+        self.embed_models.clear();
+    }
+}
+
 #[async_trait]
 impl Engine for LlamaCppEngine {
-    async fn load_model(&mut self, model_path: &str) -> Result<()> {
-        self.current_model_path = Some(model_path.to_string());
+    async fn load_model(&mut self, _model_path: &str) -> Result<()> {
         Ok(())
     }
 
     async fn unload_model(&mut self) -> Result<()> {
-        if let Some(path) = self.current_model_path.take() {
-            self.infer_models.remove(&path);
-            self.embed_models.remove(&path);
-        }
+        self.infer_models.clear();
+        self.embed_models.clear();
         Ok(())
     }
 
     fn is_loaded(&self) -> bool {
-        self.current_model_path.is_some()
+        !self.infer_models.is_empty() || !self.embed_models.is_empty()
     }
 
     fn default_model(&self) -> String {
@@ -193,8 +185,8 @@ impl Engine for LlamaCppEngine {
         prompt: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
-        let model_path = self.resolve_model_path(model)?;
-        let model = self.get_infer_model(&model_path)?;
+        let model_path = model.ok_or_else(|| anyhow!("model path required for infer"))?;
+        let model = self.get_infer_model(model_path)?;
 
         let backend = self.backend.clone();
         let prompt_str = prompt.to_string();
@@ -240,7 +232,7 @@ impl Engine for LlamaCppEngine {
             }
 
             let mut n_cur = n_tokens as i32;
-            let n_decode = 0;
+            let mut n_decode: usize = 0;
             let max_tokens = config.max_tokens.unwrap_or(512);
 
             let mut in_think_block = false;
@@ -312,6 +304,7 @@ impl Engine for LlamaCppEngine {
                     token_str_buffer.clear();
                 }
 
+                n_decode += 1;
                 batch.clear();
                 let _ = batch.add(next_token, n_cur, &[0], true);
                 n_cur += 1;
@@ -336,8 +329,8 @@ impl Engine for LlamaCppEngine {
         input: &str,
         config: InferenceConfig,
     ) -> Result<mpsc::Receiver<Result<InferenceEvent>>> {
-        let model_path = self.resolve_model_path(model)?;
-        let model = self.get_embed_model(&model_path)?;
+        let model_path = model.ok_or_else(|| anyhow!("model path required for embed"))?;
+        let model = self.get_embed_model(model_path)?;
 
         let backend = self.backend.clone();
         let input_str = input.to_string();
