@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusty_genius_core::manifest::ModelSpec;
+use rusty_genius_core::manifest::{ModelFormat, ModelSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -26,6 +26,12 @@ pub struct ModelEntry {
     pub quantization: String,
     #[serde(default = "default_purpose")]
     pub purpose: ModelPurpose,
+    /// Model format: "Gguf" (default) or "Mlx".
+    #[serde(default)]
+    pub format: ModelFormat,
+    /// For multi-file formats (MLX), the list of files to download.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 fn default_purpose() -> ModelPurpose {
@@ -144,6 +150,8 @@ impl ModelRegistry {
                 repo: entry.repo.clone(),
                 filename: entry.filename.clone(),
                 quantization: entry.quantization.clone(),
+                format: entry.format.clone(),
+                files: entry.files.clone(),
             });
         }
         None

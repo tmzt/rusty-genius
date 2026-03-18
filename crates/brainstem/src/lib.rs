@@ -213,6 +213,24 @@ impl Orchestrator {
         })
     }
 
+    /// Create an Orchestrator with a named engine backend (e.g. "mlx", "llama").
+    #[cfg(feature = "cortex-engine")]
+    pub async fn with_engine_name(engine_name: &str) -> Result<Self> {
+        let engine = rusty_genius_cortex::create_engine_by_name(engine_name)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let asset_authority = AssetAuthority::new()?;
+        let cache_dir = asset_authority.registry().get_cache_dir();
+        Ok(Self {
+            engine,
+            asset_authority,
+            strategy: CortexStrategy::HibernateAfter(Duration::from_secs(300)),
+            last_activity: Instant::now(),
+            last_model_name: None,
+            model_cache: ModelCache::with_cache_dir(&cache_dir),
+        })
+    }
+
     /// Create an Orchestrator with a pre-built engine (useful for testing).
     pub fn with_engine(engine: Box<dyn Engine>) -> Self {
         Self {
@@ -255,7 +273,7 @@ impl Orchestrator {
                 let elapsed = self.last_activity.elapsed();
                 if elapsed >= d {
                     if let Err(e) = self.engine.unload_model().await {
-                        eprintln!("Failed to hibernate engine: {}", e);
+                        log::warn!("failed to hibernate engine: {}", e);
                     }
                     None
                 } else {
@@ -287,11 +305,7 @@ impl Orchestrator {
                 Some(msg) => {
                     self.last_activity = Instant::now();
                     let request_id = msg.id.clone().unwrap_or_else(|| "anon".to_string());
-                    eprintln!("DEBUG: [orchestrator] command: {:?}", msg.command);
-                    eprintln!(
-                        "DEBUG: [orchestrator] received command for [{}]: {:?}",
-                        request_id, msg.command
-                    );
+                    log::info!("command [{}]: {:?}", request_id, msg.command);
 
                     match msg.command {
                         BrainstemCommand::LoadModel(name_or_path) => {
@@ -317,6 +331,20 @@ impl Orchestrator {
                         } => {
                             self.handle_embed(model, input, config, &request_id, &mut output_tx)
                                 .await;
+                        }
+                        BrainstemCommand::KeepResident {
+                            model,
+                            purpose,
+                            duration_secs,
+                        } => {
+                            self.handle_keep_resident(
+                                model,
+                                purpose,
+                                duration_secs,
+                                &request_id,
+                                &mut output_tx,
+                            )
+                            .await;
                         }
                         BrainstemCommand::ListModels => {
                             self.handle_list_models(&request_id, &mut output_tx).await;
@@ -445,13 +473,41 @@ impl Orchestrator {
                 })
                 .await;
         } else {
-            eprintln!("[preload] {} loaded for {}", model, purpose);
+            log::info!("preload complete: {} for {}", model, purpose);
             let _ = output_tx
                 .send(BrainstemOutput {
                     id: Some(request_id.to_string()),
                     body: BrainstemBody::Event(InferenceEvent::Complete),
                 })
                 .await;
+        }
+    }
+
+    // ── KeepResident: preload + pin strategy ──
+
+    async fn handle_keep_resident(
+        &mut self,
+        model: String,
+        purpose: String,
+        duration_secs: Option<u64>,
+        request_id: &str,
+        output_tx: &mut mpsc::Sender<BrainstemOutput>,
+    ) {
+        // First, preload the model into the engine.
+        self.handle_preload_model(model.clone(), purpose, request_id, output_tx)
+            .await;
+
+        // Switch strategy so the engine stays resident.
+        match duration_secs {
+            None => {
+                self.strategy = CortexStrategy::KeepAlive;
+                log::info!("keep-resident: {} pinned indefinitely", model);
+            }
+            Some(secs) => {
+                self.strategy = CortexStrategy::HibernateAfter(Duration::from_secs(secs));
+                self.last_activity = Instant::now();
+                log::info!("keep-resident: {} pinned for {}s", model, secs);
+            }
         }
     }
 
@@ -550,11 +606,23 @@ impl Orchestrator {
         }
 
         let resolved = self.last_model_name.as_ref().map(|n| self.resolve_model_path(n));
+        let model_label = resolved.as_deref().unwrap_or("default");
+        log::info!(
+            "infer [{}] model={} prompt_len={}",
+            request_id, model_label, prompt.len()
+        );
+        log::debug!("infer [{}] prompt: {}", request_id, prompt);
         match self.engine.infer(resolved.as_deref(), &prompt, config).await {
             Ok(mut event_rx) => {
+                let mut response_len: usize = 0;
                 while let Some(event_res) = event_rx.next().await {
                     match event_res {
                         Ok(event) => {
+                            if let BrainstemBody::Event(InferenceEvent::Content(ref tok)) =
+                                (BrainstemBody::Event(event.clone()))
+                            {
+                                response_len += tok.len();
+                            }
                             if output_tx
                                 .send(BrainstemOutput {
                                     id: Some(request_id.to_string()),
@@ -567,6 +635,7 @@ impl Orchestrator {
                             }
                         }
                         Err(e) => {
+                            log::error!("infer [{}] stream error: {}", request_id, e);
                             let _ = output_tx
                                 .send(BrainstemOutput {
                                     id: Some(request_id.to_string()),
@@ -576,8 +645,10 @@ impl Orchestrator {
                         }
                     }
                 }
+                log::info!("infer [{}] complete, response_len={}", request_id, response_len);
             }
             Err(e) => {
+                log::error!("infer [{}] error: {}", request_id, e);
                 let _ = output_tx
                     .send(BrainstemOutput {
                         id: Some(request_id.to_string()),
@@ -606,11 +677,21 @@ impl Orchestrator {
         }
 
         let resolved = self.last_model_name.as_ref().map(|n| self.resolve_model_path(n));
+        let model_label = resolved.as_deref().unwrap_or("default");
+        log::info!(
+            "embed [{}] model={} input_len={}",
+            request_id, model_label, input.len()
+        );
+        log::debug!("embed [{}] input: {}", request_id, input);
         match self.engine.embed(resolved.as_deref(), &input, config).await {
             Ok(mut event_rx) => {
+                let mut got_embedding = false;
                 while let Some(event_res) = event_rx.next().await {
                     match event_res {
                         Ok(event) => {
+                            if let InferenceEvent::Embedding(_) = &event {
+                                got_embedding = true;
+                            }
                             if output_tx
                                 .send(BrainstemOutput {
                                     id: Some(request_id.to_string()),
@@ -623,6 +704,7 @@ impl Orchestrator {
                             }
                         }
                         Err(e) => {
+                            log::error!("embed [{}] stream error: {}", request_id, e);
                             let _ = output_tx
                                 .send(BrainstemOutput {
                                     id: Some(request_id.to_string()),
@@ -632,8 +714,10 @@ impl Orchestrator {
                         }
                     }
                 }
+                log::info!("embed [{}] complete, got_embedding={}", request_id, got_embedding);
             }
             Err(e) => {
+                log::error!("embed [{}] error: {}", request_id, e);
                 let _ = output_tx
                     .send(BrainstemOutput {
                         id: Some(request_id.to_string()),

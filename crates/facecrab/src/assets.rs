@@ -4,7 +4,7 @@ use anyhow::Result;
 use futures::channel::mpsc;
 use futures::sink::SinkExt;
 use futures::StreamExt;
-use rusty_genius_core::manifest::ModelSpec;
+use rusty_genius_core::manifest::{ModelFormat, ModelSpec};
 use rusty_genius_core::protocol::AssetEvent;
 use rusty_genius_core::GeniusError;
 use std::fs;
@@ -109,19 +109,14 @@ impl AssetAuthority {
         let spec = if let Some(s) = self.registry.resolve(name) {
             s
         } else if name.contains('/') {
-            // Heuristic: If it contains '/', treat as Repo/Repo-GGUF:filename:quant
-            // and try to parse it.
-            // For now, let's assume Repo/Repo/filename pattern if possible or default.
-            // But let's check if the user wanted a specific format.
-            // Actually, let's just allow downloading by registry name mainly.
-            // If it's a Repo, we might need more info.
-
             let parts: Vec<&str> = name.split(':').collect();
             if parts.len() >= 2 {
                 ModelSpec {
                     repo: parts[0].to_string(),
                     filename: parts[1].to_string(),
                     quantization: parts.get(2).unwrap_or(&"Q4_K_M").to_string(),
+                    format: ModelFormat::Gguf,
+                    files: vec![],
                 }
             } else {
                 let err = format!(
@@ -137,6 +132,24 @@ impl AssetAuthority {
             return Err(GeniusError::ManifestError(err).into());
         };
 
+        match spec.format {
+            ModelFormat::Mlx => {
+                self.ensure_mlx_model(name, &spec, tx, silent).await
+            }
+            ModelFormat::Gguf => {
+                self.ensure_gguf_model(name, &spec, tx, silent).await
+            }
+        }
+    }
+
+    /// Download a single-file GGUF model.
+    async fn ensure_gguf_model(
+        &self,
+        name: &str,
+        spec: &ModelSpec,
+        mut tx: mpsc::Sender<AssetEvent>,
+        silent: bool,
+    ) -> Result<PathBuf> {
         let cache_dir = self.registry.get_cache_dir();
         fs::create_dir_all(&cache_dir)?;
 
@@ -151,18 +164,20 @@ impl AssetAuthority {
         if !silent {
             println!("Downloading {} from {}...", spec.filename, spec.repo);
         }
-        self.download_file_with_events(&spec, &path, tx.clone())
+        self.download_file_with_events(spec, &path, tx.clone())
             .await?;
 
         // If it was a new model (resolved via heuristic), record it
         if self.registry.resolve(name).is_none() {
             let mut registry = ModelRegistry::new()?;
-            registry.record_model(crate::registry::ModelEntry {
+            registry.record_model(ModelEntry {
                 name: name.to_string(),
                 repo: spec.repo.clone(),
                 filename: spec.filename.clone(),
                 quantization: spec.quantization.clone(),
                 purpose: crate::registry::ModelPurpose::Inference,
+                format: ModelFormat::Gguf,
+                files: vec![],
             })?;
         }
 
@@ -170,6 +185,141 @@ impl AssetAuthority {
             .send(AssetEvent::Complete(path.display().to_string()))
             .await;
         Ok(path)
+    }
+
+    /// Download a multi-file MLX model directory.
+    /// Downloads listed files + discovers safetensors shards from the index.
+    /// Returns the model directory path.
+    async fn ensure_mlx_model(
+        &self,
+        name: &str,
+        spec: &ModelSpec,
+        mut tx: mpsc::Sender<AssetEvent>,
+        silent: bool,
+    ) -> Result<PathBuf> {
+        let cache_dir = self.registry.get_cache_dir();
+        let model_dir = cache_dir.join(&spec.filename);
+        fs::create_dir_all(&model_dir)?;
+
+        // Check if already downloaded (config.json exists as sentinel)
+        let config_path = model_dir.join("config.json");
+        if config_path.exists() {
+            let _ = tx
+                .send(AssetEvent::Complete(model_dir.display().to_string()))
+                .await;
+            return Ok(model_dir);
+        }
+
+        if !silent {
+            println!("Downloading MLX model {} from {}...", spec.filename, spec.repo);
+        }
+
+        // Start with the files listed in the registry entry
+        let mut files_to_download: Vec<String> = spec.files.clone();
+        if files_to_download.is_empty() {
+            // Minimum set for MLX models
+            files_to_download = vec![
+                "config.json".to_string(),
+                "tokenizer.json".to_string(),
+                "tokenizer_config.json".to_string(),
+            ];
+        }
+
+        // Download metadata files first
+        for file in &files_to_download {
+            let file_path = model_dir.join(file);
+            if file_path.exists() {
+                continue;
+            }
+            let file_spec = ModelSpec {
+                repo: spec.repo.clone(),
+                filename: file.clone(),
+                quantization: spec.quantization.clone(),
+                format: ModelFormat::Mlx,
+                files: vec![],
+            };
+            let _ = tx
+                .try_send(AssetEvent::Started(format!("{}/{}", spec.repo, file)));
+            self.download_file_with_events(&file_spec, &file_path, tx.clone())
+                .await?;
+        }
+
+        // Discover safetensors shards from the index file
+        let index_path = model_dir.join("model.safetensors.index.json");
+        let shard_files = if index_path.exists() {
+            Self::parse_safetensors_index(&index_path)?
+        } else {
+            // Single-file model: try model.safetensors
+            vec!["model.safetensors".to_string()]
+        };
+
+        // Download weight shards
+        let total_shards = shard_files.len();
+        for (i, shard) in shard_files.iter().enumerate() {
+            let shard_path = model_dir.join(shard);
+            if shard_path.exists() {
+                continue;
+            }
+            if !silent {
+                println!("  [{}/{}] {}", i + 1, total_shards, shard);
+            }
+            let _ = tx.try_send(AssetEvent::Started(format!(
+                "[{}/{}] {}",
+                i + 1,
+                total_shards,
+                shard
+            )));
+            let shard_spec = ModelSpec {
+                repo: spec.repo.clone(),
+                filename: shard.clone(),
+                quantization: spec.quantization.clone(),
+                format: ModelFormat::Mlx,
+                files: vec![],
+            };
+            self.download_file_with_events(&shard_spec, &shard_path, tx.clone())
+                .await?;
+        }
+
+        // Record in dynamic registry if not already known
+        if self.registry.resolve(name).is_none() {
+            let mut registry = ModelRegistry::new()?;
+            registry.record_model(ModelEntry {
+                name: name.to_string(),
+                repo: spec.repo.clone(),
+                filename: spec.filename.clone(),
+                quantization: spec.quantization.clone(),
+                purpose: crate::registry::ModelPurpose::Inference,
+                format: ModelFormat::Mlx,
+                files: spec.files.clone(),
+            })?;
+        }
+
+        let _ = tx
+            .send(AssetEvent::Complete(model_dir.display().to_string()))
+            .await;
+        Ok(model_dir)
+    }
+
+    /// Parse a safetensors index file to discover weight shard filenames.
+    fn parse_safetensors_index(index_path: &PathBuf) -> Result<Vec<String>> {
+        let content = fs::read_to_string(index_path)?;
+        // The index JSON has a "weight_map" key mapping layer names to shard files.
+        // We extract unique shard filenames.
+        let parsed: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("failed to parse safetensors index: {e}"))?;
+        let weight_map = parsed
+            .get("weight_map")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow::anyhow!("safetensors index missing weight_map"))?;
+
+        let mut shards: Vec<String> = weight_map
+            .values()
+            .filter_map(|v| v.as_str())
+            .map(|s| s.to_string())
+            .collect();
+        shards.sort();
+        shards.dedup();
+        Ok(shards)
     }
 
     async fn download_file_with_events(

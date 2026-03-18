@@ -16,11 +16,33 @@ impl Default for UserManifest {
     }
 }
 
+/// Format of the model weights on disk.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ModelFormat {
+    /// Single GGUF file (llama.cpp compatible).
+    Gguf,
+    /// Native MLX directory (config.json + tokenizer.json + *.safetensors).
+    Mlx,
+}
+
+impl Default for ModelFormat {
+    fn default() -> Self {
+        ModelFormat::Gguf
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSpec {
     pub repo: String,
     pub filename: String,
     pub quantization: String,
+    /// Model format. Defaults to GGUF for backward compatibility.
+    #[serde(default)]
+    pub format: ModelFormat,
+    /// For multi-file formats (MLX), the list of files to download.
+    /// Empty for GGUF (single file, derived from `filename`).
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

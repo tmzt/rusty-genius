@@ -71,6 +71,16 @@ pub enum BrainstemCommand {
         input: String,
         config: InferenceConfig,
     },
+    /// Keep a model resident in memory. Preloads the engine and switches
+    /// the cortex strategy so the model stays loaded.
+    /// `duration_secs: None` means keep alive forever; `Some(n)` keeps it
+    /// resident for `n` seconds before reverting to the default hibernate
+    /// strategy.
+    KeepResident {
+        model: String,
+        purpose: String,
+        duration_secs: Option<u64>,
+    },
     ListModels,
     Reset,
     Stop,
