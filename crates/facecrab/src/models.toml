@@ -55,8 +55,8 @@ purpose = "Inference"
 
 [[models]]
 name = "qwen-3.5-9b-instruct"
-repo = "Qwen/Qwen3.5-9B-Instruct-GGUF"
-filename = "qwen3.5-9b-instruct-q4_k_m.gguf"
+repo = "unsloth/Qwen3.5-9B-GGUF"
+filename = "Qwen3.5-9B-Q4_K_M.gguf"
 quantization = "Q4_K_M"
 purpose = "Inference"
 
