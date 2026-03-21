@@ -233,7 +233,8 @@ impl Engine for LlamaCppEngine {
             };
 
             let n_tokens = tokens_list.len();
-            let mut batch = LlamaBatch::new(2048, 1);
+            let batch_size = n_tokens.max(2048);
+            let mut batch = LlamaBatch::new(batch_size, 1);
 
             let last_index = n_tokens as i32 - 1;
             for (i, token) in tokens_list.iter().enumerate() {
@@ -375,7 +376,8 @@ impl Engine for LlamaCppEngine {
                 }
             };
 
-            let mut batch = LlamaBatch::new(2048, 1);
+            let batch_size = tokens_list.len().max(2048);
+            let mut batch = LlamaBatch::new(batch_size, 1);
 
             // Mark all tokens for output so per-token embeddings are
             // available for mean-pooling with POOLING_TYPE_NONE models.
