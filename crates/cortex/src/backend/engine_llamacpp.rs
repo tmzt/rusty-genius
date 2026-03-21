@@ -44,8 +44,10 @@ impl<'a> CortexContext<'a> {
         backend: &'a LlamaBackend,
         config: &InferenceConfig,
     ) -> Result<Self> {
+        let n_ctx = config.context_size.unwrap_or(4096);
         let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(config.context_size.and_then(NonZeroU32::new));
+            .with_n_ctx(NonZeroU32::new(n_ctx))
+            .with_n_batch(n_ctx);
         let ctx = model.new_context(backend, ctx_params)
             .map_err(|e| anyhow!("Inference context creation failed: {}", e))?;
         Ok(CortexContext::Inference(ctx))
